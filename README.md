@@ -1,8 +1,17 @@
 <p align="center">
-  <a href="https://www.bilhost.com/"><img src="assets/branding/bilhost-logo.svg" alt="Bilhost" height="58"></a>
-  <br>
-  <sub>Projemiz <a href="https://www.bilhost.com/">Bilhost</a> tarafından desteklenmektedir.</sub>
+  <a href="https://www.bilhost.com/">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="assets/branding/bilhost-logo-dark.svg">
+      <img src="assets/branding/bilhost-logo.svg" alt="Bilhost" height="90">
+    </picture>
+  </a>
 </p>
+
+<h2 align="center">Projemiz <a href="https://www.bilhost.com/">Bilhost</a> tarafından desteklenmektedir.</h2>
+
+<p align="center"><a href="https://www.bilhost.com/"><b>www.bilhost.com</b></a></p>
+
+<br>
 
 <div align="center">
 
