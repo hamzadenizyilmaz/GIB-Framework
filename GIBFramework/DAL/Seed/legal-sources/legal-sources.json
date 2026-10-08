@@ -1,0 +1,102 @@
+{
+  // Kanonik hukuki/teknik kaynak kataloğu (resmî GİB / Resmî Gazete adresleri; 07.10.2026'da kontrol edildi).
+  // sha256: indirilen resmî dosyanın hash'i (Legal Source Watcher doldurur; değişiklikte "LEGAL SOURCE CHANGED" olayı açılır).
+  "sources": [
+    {
+      "code": "VUK",
+      "title": "213 sayılı Vergi Usul Kanunu",
+      "kind": "Law",
+      "uri": "https://gib.gov.tr/mevzuat/kanun/434",
+      "sha256": null,
+      "notes": null
+    },
+    {
+      "code": "VUK-GT-509",
+      "title": "509 Sıra No.lu VUK Genel Tebliği (dipnotlu güncel metin, 589 dahil)",
+      "kind": "Communique",
+      "uri": "https://ebelge.gib.gov.tr/dosyalar/tebligler/Dipnotlu_Guncel_Sekli_ile_509_Sira_No%27lu_VUK_Genel_Tebligi.pdf",
+      "sha256": null,
+      "notes": "72 sayfa, 16.04.2026 tarihli PDF. e-Arşiv: IV.2.4 (IV.2.4.3 s.21, dipnot 24-25); iptal/itiraz bildirimi: V.10 (s.67)."
+    },
+    {
+      "code": "VUK-GT-589",
+      "title": "589 Sıra No.lu VUK Genel Tebliği (Resmî Gazete 31.12.2025, Sayı 33124, 5. Mükerrer)",
+      "kind": "Communique",
+      "uri": "https://www.resmigazete.gov.tr/eskiler/2025/12/20251231M5-32.pdf",
+      "sha256": null,
+      "notes": "509 IV.2.4.3'ü değiştirir: basit usul / işletme hesabı için 3.000 TL eşiği 31.12.2026'ya kadar, tutardan bağımsız zorunluluk 01.01.2027'den itibaren. GİB kopyası ebelge.gib.gov.tr/dosyalar/tebligler altında."
+    },
+    {
+      "code": "VUK-GT-588",
+      "title": "588 Sıra No.lu VUK Genel Tebliği — 2026 parasal hadler (Resmî Gazete 31.12.2025, Sayı 33124, 5. Mükerrer)",
+      "kind": "Communique",
+      "uri": "https://www.resmigazete.gov.tr/eskiler/2025/12/20251231M5-31.pdf",
+      "sha256": null,
+      "notes": "Yeniden değerleme oranı %25,49; VUK 232 fatura kullanma mecburiyeti haddi 12.000 TL (01.01.2026'dan itibaren)."
+    },
+    {
+      "code": "GIB-KAREKOD",
+      "title": "GİB Karekod Standardı Kılavuzu v1.2 (06.11.2023)",
+      "kind": "TechnicalGuide",
+      "uri": "https://ebelge.gib.gov.tr/dosyalar/kilavuzlar/Karekod_Standardi_Kilavuzu_V.1.2.pdf",
+      "sha256": null,
+      "notes": "e-Fatura §2.1, e-Arşiv §2.2: 13 anahtar (vkntckn ... odenecek)."
+    },
+    {
+      "code": "GIB-EK3",
+      "title": "e-Fatura Uygulaması Yazılım Standartları ve Nesne Yapısı (Ek-3) v1.4",
+      "kind": "TechnicalGuide",
+      "uri": "https://ebelge.gib.gov.tr/dosyalar/kilavuzlar/Ek-3e-FaturaUygulamasiYazilimStandartlariVeNesneYapisi-v1.4.pdf",
+      "sha256": null,
+      "notes": "§3: XAdES-BES, enveloped imza iskeleti."
+    },
+    {
+      "code": "GIB-UBLTR",
+      "title": "UBL-TR 1.2.1 Paketi (XSD) ve e-Fatura Paketi (Schematron)",
+      "kind": "Standard",
+      "uri": "https://ebelge.gib.gov.tr/efaturamevzuat.html",
+      "sha256": null,
+      "notes": "XSD: UBL-TR1.2.1_Paketi.zip (12.01.2026); Schematron: e-FaturaPaketi (29).zip (24.08.2026, XPath 2.0)."
+    },
+    {
+      "code": "GIB-EARSIV-IPTAL",
+      "title": "e-Arşiv Uygulamaları İptal, İhtar, İtiraz Bildirim Kılavuzu v1.1",
+      "kind": "TechnicalGuide",
+      "uri": "https://ebelge.gib.gov.tr/dosyalar/kilavuzlar/e-Arsiv_Uygulamalari_Iptal_Ihtar_Itiraz_Bildirim_Kilavuzu_V.1.1.pdf",
+      "sha256": null,
+      "notes": "§3: iptal bildirimi alıcıya teslimden itibaren 8 gün içinde."
+    },
+    {
+      "code": "GIB-EFATURA-IPTAL",
+      "title": "e-Fatura İptal, İhtar, İtiraz Bildirim Kılavuzu v1.2",
+      "kind": "TechnicalGuide",
+      "uri": "https://ebelge.gib.gov.tr/dosyalar/kilavuzlar/e-Fatura_Iptal_Ihtar_Itiraz_Bildirim_Kilavuzu_V_1.2.pdf",
+      "sha256": null,
+      "notes": "TICARIFATURA: 8 gün içinde Ret uygulama yanıtı; diğer senaryolar: İptal/İtiraz Portalı."
+    },
+    {
+      "code": "GIB-EARSIV-PORTAL",
+      "title": "e-Arşiv Fatura Portalı Düzenleme Kılavuzu v1.1",
+      "kind": "TechnicalGuide",
+      "uri": "https://ebelge.gib.gov.tr/dosyalar/kilavuzlar/5.000%E2%82%BA_ve_30.000%E2%82%BA_e-Arsiv_Fatura_Portali_Duzenleme_Kilavuzu.pdf",
+      "sha256": null,
+      "notes": "§2.1.5: taslak SMS şifresiyle 'GİB İmza' ile onaylanır (GİB uzaktan imzalar)."
+    },
+    {
+      "code": "GIB-OEK",
+      "title": "e-Fatura Uygulaması Özel Entegrasyon Kılavuzu v1.14",
+      "kind": "TechnicalGuide",
+      "uri": "https://ebelge.gib.gov.tr/dosyalar/kilavuzlar/e-Fatura_Uygulamasi_Ozel_Entegrasyon_Kilavuzu_v1.14.pdf",
+      "sha256": null,
+      "notes": null
+    },
+    {
+      "code": "GIB-VD-LISTE",
+      "title": "GİB Defterdarlık ve Vergi Daireleri Listesi (18.06.2026)",
+      "kind": "MasterData",
+      "uri": "https://cdn.gib.gov.tr/api/gibportal-file/file/getFileResources?objectKey=arsiv%2Fyardim-kaynaklar%2Fyararli-bilgiler%2FDefterdarl%C4%B1kveVergiDaireleriListesi.pdf",
+      "sha256": null,
+      "notes": "13 sayfa; 860 birim (1 Defterdarlık + 859 Vergi Dairesi Müdürlüğü) ve 233 şube."
+    }
+  ]
+}

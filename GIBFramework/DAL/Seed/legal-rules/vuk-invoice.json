@@ -1,0 +1,84 @@
+{
+  // VUK fatura düzeni kuralları (doğrulama). Parasal hadler yıllık versiyonlanır.
+  "rules": [
+    {
+      "code": "VUK-230",
+      "version": 1,
+      "kind": "Vuk230RequiredFields",
+      "title": "Faturanın şekli — zorunlu bilgiler",
+      "description": "VUK 230'da sayılan bilgiler eksikse belge VUK 227 uyarınca düzenlenmemiş sayılabilir.",
+      "effectiveFrom": "2025-01-01",
+      "effectiveTo": null,
+      "severity": "Error",
+      "blocking": true,
+      "priority": 0,
+      "legalBasis": [
+        { "source": "VUK", "article": "227" },
+        { "source": "VUK", "article": "230" }
+      ],
+      "parameters": {
+        "buyerTaxIdRequiredForTaxpayers": true
+      },
+      "review": {
+        "status": "PendingExpertReview",
+        "reviewedBy": null,
+        "approvedBy": null,
+        "approvedAt": null,
+        "notes": "Alıcının vergi dairesi/hesap numarası 'varsa' kaydıyla istenir; mükellef alıcı için zorunlu tutulması uzman tarafından teyit edilecek."
+      }
+    },
+    {
+      "code": "VUK-231-7DAY",
+      "version": 1,
+      "kind": "IssuancePeriod",
+      "title": "Fatura düzenleme süresi",
+      "description": "Fatura, malın teslimi veya hizmetin yapıldığı tarihten itibaren azami yedi gün içinde düzenlenir.",
+      "effectiveFrom": "2025-01-01",
+      "effectiveTo": null,
+      "severity": "Error",
+      "blocking": false,
+      "priority": 0,
+      "legalBasis": [
+        { "source": "VUK", "article": "231/5" },
+        { "source": "VUK", "article": "18" }
+      ],
+      "parameters": {
+        "maxDays": 7
+      },
+      "review": {
+        "status": "PendingExpertReview",
+        "reviewedBy": null,
+        "approvedBy": null,
+        "approvedAt": null,
+        "notes": "Özel süre/istisna rejimleri (ör. dönemsel faturalama) ve sürenin tatil gününe rastlaması modellenmedi; ayrı kural versiyonları olarak eklenecek. Engelleyici değil, yetkili incelemesi gerektirir."
+      }
+    },
+    {
+      "code": "VUK-232-LIMIT",
+      "version": 1,
+      "kind": "InvoiceObligationThreshold",
+      "title": "Fatura verme/alma mecburiyeti haddi (2026)",
+      "description": "Bu had e-Arşiv zorunluluğundan bağımsız bir VUK kontrolüdür.",
+      "effectiveFrom": "2026-01-01",
+      "effectiveTo": "2026-12-31",
+      "severity": "Info",
+      "blocking": false,
+      "priority": 0,
+      "legalBasis": [
+        { "source": "VUK", "article": "232" },
+        { "source": "VUK-GT-588", "article": null }
+      ],
+      "parameters": {
+        "amountTry": 12000,
+        "amountBasis": "VatIncluded"
+      },
+      "review": {
+        "status": "PendingExpertReview",
+        "reviewedBy": null,
+        "approvedBy": null,
+        "approvedAt": null,
+        "notes": "12.000 TL, 588 RG metni (31.12.2025/33124-5.M) ile karşılaştırıldı. KDV dahil/hariç esasına dair resmî GİB açıklaması bulunamadı; uzman teyidi gerekli."
+      }
+    }
+  ]
+}

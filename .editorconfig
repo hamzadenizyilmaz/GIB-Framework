@@ -1,0 +1,24 @@
+root = true
+
+[*]
+charset = utf-8
+insert_final_newline = true
+indent_style = space
+indent_size = 4
+trim_trailing_whitespace = true
+
+[*.{json,yml,yaml,props,csproj}]
+indent_size = 2
+
+[*.cs]
+csharp_style_namespace_declarations = file_scoped:warning
+dotnet_sort_system_directives_first = true
+
+# CA1720: "Signed" gibi alan terimleri (belge durumları) tür adı sayılıyor; yanlış pozitif.
+dotnet_diagnostic.CA1720.severity = none
+
+[GIBFramework.Tests/**.cs]
+# Test adlarında alt çizgi kullanılır (Given_When_Then).
+dotnet_diagnostic.CA1707.severity = none
+dotnet_diagnostic.CA1515.severity = none
+dotnet_diagnostic.CA2007.severity = none

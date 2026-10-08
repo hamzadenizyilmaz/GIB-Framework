@@ -1,0 +1,110 @@
+{
+  // Belge türü yönlendirme kuralları. Öncelik (priority) büyük olan önce değerlendirilir; karar veren ilk kural kazanır.
+  // Bir kural kaldırılmaz: yeni versiyon eklenir, eskisi effectiveTo ile kapanır.
+  // 07.10.2026: parametreler 509 dipnotlu güncel metin (IV.2.4.3, s.21, dipnot 24-25) ve 589 RG metniyle karşılaştırıldı.
+  // Durum yine PendingExpertReview: SMMM/YMM onayı veri olarak işlenmeden üretimde kullanılmaz.
+  "rules": [
+    {
+      "code": "EF-ROUTING",
+      "version": 1,
+      "kind": "EFaturaRouting",
+      "title": "Kayıtlı kullanıcılar arası e-Fatura",
+      "description": "Alıcı ve satıcı e-Fatura uygulamasına kayıtlıysa belge e-Fatura olarak düzenlenir ve GİB e-Fatura sistemi üzerinden gönderilir.",
+      "effectiveFrom": "2025-01-01",
+      "effectiveTo": null,
+      "severity": "Error",
+      "blocking": true,
+      "priority": 100,
+      "legalBasis": [
+        { "source": "VUK", "article": "Mük. 242" },
+        { "source": "VUK-GT-509", "article": "V.5.1" }
+      ],
+      "parameters": {},
+      "review": {
+        "status": "PendingExpertReview",
+        "reviewedBy": null,
+        "approvedBy": null,
+        "approvedAt": null,
+        "notes": "509 V.5.1 ile karşılaştırıldı. Alıcı kayıtlı / satıcı kayıtsız durumunda belge türü uzman tarafından belirlenecek (şu an manuel inceleme)."
+      }
+    },
+    {
+      "code": "EA-2025-001",
+      "version": 1,
+      "kind": "EArchiveRouting",
+      "title": "2025 e-Arşiv: vergiler dahil 3.000 TL'yi aşan faturalar",
+      "description": "e-Arşiv kullanıcısı olmayan mükellefler, e-Fatura kullanıcısı olmayanlara düzenlenen ve vergiler dahil toplam tutarı 3.000 TL'yi aşan faturaları e-Arşiv olarak düzenler.",
+      "effectiveFrom": "2025-01-01",
+      "effectiveTo": "2025-12-31",
+      "severity": "Error",
+      "blocking": true,
+      "priority": 80,
+      "legalBasis": [
+        { "source": "VUK-GT-509", "article": "IV.2.4.3" }
+      ],
+      "parameters": {
+        "amountThresholdTry": 3000,
+        "amountBasis": "VatIncluded"
+      },
+      "review": {
+        "status": "PendingExpertReview",
+        "reviewedBy": null,
+        "approvedBy": null,
+        "approvedAt": null,
+        "notes": "509 IV.2.4.3 (1/1/2025–31/12/2025, vergiler dahil 3 Bin TL) ile karşılaştırıldı."
+      }
+    },
+    {
+      "code": "EA-2026-TRANSITION-001",
+      "version": 1,
+      "kind": "EArchiveRouting",
+      "title": "2026 e-Arşiv geçiş grubu (basit usul / işletme hesabı)",
+      "description": "Basit usul ve işletme hesabı esasında defter tutan mükellefler için 31.12.2026'ya kadar vergiler dahil 3.000 TL eşiği uygulanır.",
+      "effectiveFrom": "2026-01-01",
+      "effectiveTo": "2026-12-31",
+      "severity": "Error",
+      "blocking": true,
+      "priority": 90,
+      "legalBasis": [
+        { "source": "VUK-GT-509", "article": "IV.2.4.3" },
+        { "source": "VUK-GT-589", "article": "1" }
+      ],
+      "parameters": {
+        "sellerRegimes": [ "BasitUsul", "IsletmeHesabi" ],
+        "amountThresholdTry": 3000,
+        "amountBasis": "VatIncluded"
+      },
+      "review": {
+        "status": "PendingExpertReview",
+        "reviewedBy": null,
+        "approvedBy": null,
+        "approvedAt": null,
+        "notes": "589 (RG 31.12.2025/33124-5.M) ve 509 IV.2.4.3 dipnot 24-25 ile karşılaştırıldı: 3.000 TL eşiği 31.12.2026'ya kadar, vergiler dahil."
+      }
+    },
+    {
+      "code": "EA-2026-001",
+      "version": 1,
+      "kind": "EArchiveRouting",
+      "title": "2026 tutardan bağımsız e-Arşiv",
+      "description": "e-Arşiv kullanıcısı olmayan mükellefler, e-Fatura kullanıcısı olmayanlara düzenledikleri faturaları 01.01.2026'dan itibaren tutardan bağımsız olarak e-Arşiv olarak düzenler (geçiş grubu için 01.01.2027).",
+      "effectiveFrom": "2026-01-01",
+      "effectiveTo": null,
+      "severity": "Error",
+      "blocking": true,
+      "priority": 80,
+      "legalBasis": [
+        { "source": "VUK-GT-509", "article": "IV.2.4.3" },
+        { "source": "VUK-GT-589", "article": "1" }
+      ],
+      "parameters": {},
+      "review": {
+        "status": "PendingExpertReview",
+        "reviewedBy": null,
+        "approvedBy": null,
+        "approvedAt": null,
+        "notes": "509 IV.2.4.3 ile karşılaştırıldı. İstisnalar (V.7, VIII) ve e-Arşiv kullanıcılarının (IV.2.4.1) durumu uzmanca teyit edilecek."
+      }
+    }
+  ]
+}

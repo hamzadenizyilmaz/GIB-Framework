@@ -1,0 +1,5 @@
+IF DB_ID(N'GIBFramework') IS NULL
+BEGIN
+    CREATE DATABASE [GIBFramework];
+END
+GO

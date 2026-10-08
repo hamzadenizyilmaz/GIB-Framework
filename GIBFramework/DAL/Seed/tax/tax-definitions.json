@@ -1,0 +1,32 @@
+{
+  // Vergi kodları, KDV oranları, tevkifat ve istisna tanımları (tarihli). Kod içinde oran tutulmaz.
+  // DURUM: PendingExpertReview — oranlar, tevkifat kodları/oranları ve istisna kodları GİB kod listesi
+  // ve ilgili KDV Genel Uygulama Tebliği metninden SMMM/YMM tarafından teyit edilmelidir.
+  "reviewStatus": "PendingExpertReview",
+  "reviewNotes": "KDV oranları 10.07.2023 itibarıyla %1/%10/%20 olarak tanımlandı. Tevkifat kodları/oranları ve istisna kodları GİB güncel kod listesinden teyit edilecek.",
+  "vatRates": [
+    { "rate": 0, "effectiveFrom": "2000-01-01", "effectiveTo": null },
+    { "rate": 1, "effectiveFrom": "2023-07-10", "effectiveTo": null },
+    { "rate": 10, "effectiveFrom": "2023-07-10", "effectiveTo": null },
+    { "rate": 20, "effectiveFrom": "2023-07-10", "effectiveTo": null }
+  ],
+  "taxTypes": [
+    { "code": "0015", "name": "Gerçek Usulde Katma Değer Vergisi", "shortName": "KDV" },
+    { "code": "9015", "name": "KDV Tevkifatı", "shortName": "KDV TEVKİFAT" }
+  ],
+  "withholdings": [
+    { "code": "602", "name": "Etüt, plan-proje, danışmanlık, denetim vb. hizmetler", "numerator": 9, "denominator": 10, "effectiveFrom": "2026-01-01", "effectiveTo": null },
+    { "code": "603", "name": "Makine, teçhizat, demirbaş ve taşıtlara ait tadil, bakım ve onarım hizmetleri", "numerator": 7, "denominator": 10, "effectiveFrom": "2026-01-01", "effectiveTo": null },
+    { "code": "604", "name": "Yemek servis hizmeti", "numerator": 5, "denominator": 10, "effectiveFrom": "2026-01-01", "effectiveTo": null },
+    { "code": "606", "name": "İşgücü temin hizmetleri", "numerator": 9, "denominator": 10, "effectiveFrom": "2026-01-01", "effectiveTo": null },
+    { "code": "607", "name": "Özel güvenlik hizmeti", "numerator": 9, "denominator": 10, "effectiveFrom": "2026-01-01", "effectiveTo": null },
+    { "code": "612", "name": "Temizlik hizmeti", "numerator": 9, "denominator": 10, "effectiveFrom": "2026-01-01", "effectiveTo": null },
+    { "code": "613", "name": "Çevre ve bahçe bakım hizmetleri", "numerator": 9, "denominator": 10, "effectiveFrom": "2026-01-01", "effectiveTo": null },
+    { "code": "614", "name": "Servis taşımacılığı hizmeti", "numerator": 5, "denominator": 10, "effectiveFrom": "2026-01-01", "effectiveTo": null }
+  ],
+  "exemptions": [
+    { "code": "301", "name": "11/1-a Mal ihracatı" },
+    { "code": "302", "name": "11/1-a Hizmet ihracatı" },
+    { "code": "351", "name": "KDV - İstisna Olmayan Diğer" }
+  ]
+}

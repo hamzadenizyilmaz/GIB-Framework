@@ -1,0 +1,64 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Version>5.2.1</Version>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>GIBFramework</RootNamespace>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <SatelliteResourceLanguages>en;tr</SatelliteResourceLanguages>
+    <UserSecretsId>gibframework-6b1f2a8e-4c1e-4f7a-9d2b-0c9e5d7a1b33</UserSecretsId>
+    <ClientAppDir>ClientApp\</ClientAppDir>
+    <DefaultItemExcludes>$(DefaultItemExcludes);ClientApp\node_modules\**;evidence\**;keys\**;logs\**;App_Data\**;publish\**</DefaultItemExcludes>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <DebugType>None</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="9.0.20" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="7.1.1" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="9.0.6" />
+    <PackageReference Include="Swashbuckle.AspNetCore.ReDoc" Version="9.0.6" />
+    <PackageReference Include="System.Security.Cryptography.Xml" Version="9.0.20" />
+    <PackageReference Include="QRCoder" Version="1.8.0" />
+    <PackageReference Include="PdfPig" Version="0.1.16" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Remove="ClientApp\**" />
+    <Content Remove="wwwroot\app\**" />
+    <None Remove="ClientApp\**" />
+    <None Include="ClientApp\**" Exclude="ClientApp\node_modules\**" />
+    <ClientAppSource Include="ClientApp\src\**;ClientApp\vendor\**;ClientApp\index.html;ClientApp\vite.config.js;ClientApp\package.json;ClientApp\package-lock.json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Update="DAL\Seed\**\*.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Update="appsettings.Development.json" CopyToPublishDirectory="Never" />
+  </ItemGroup>
+
+  <Target Name="ClientAppInstall" BeforeTargets="ClientAppBuild" Condition="'$(DesignTimeBuild)' != 'true' And !Exists('$(ClientAppDir)node_modules')">
+    <Exec Command="node --version" ContinueOnError="true" StandardOutputImportance="low">
+      <Output TaskParameter="ExitCode" PropertyName="NodeExitCode" />
+    </Exec>
+    <Error Condition="'$(NodeExitCode)' != '0'" Text="Node.js bulunamadı. Panel derlemesi için Node.js 20 veya üstünü kurun: https://nodejs.org" />
+    <Exec WorkingDirectory="$(ClientAppDir)" Command="npm ci" />
+  </Target>
+
+  <Target Name="ClientAppBuild" BeforeTargets="BeforeBuild" Condition="'$(DesignTimeBuild)' != 'true'" Inputs="@(ClientAppSource)" Outputs="wwwroot\app\index.html">
+    <Exec WorkingDirectory="$(ClientAppDir)" Command="npm run build" />
+  </Target>
+
+  <Target Name="ClientAppContent" AfterTargets="ClientAppBuild" BeforeTargets="ResolveStaticWebAssetsInputs;AssignTargetPaths">
+    <ItemGroup>
+      <Content Remove="wwwroot\app\**" />
+      <Content Include="wwwroot\app\**" CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
+
+</Project>
