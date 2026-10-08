@@ -1,10 +1,15 @@
+<p align="center">
+  <a href="https://www.bilhost.com/"><img src="assets/branding/bilhost-logo.svg" alt="Bilhost" height="58"></a>
+  <br>
+  <sub>Projemiz <a href="https://www.bilhost.com/">Bilhost</a> tarafından desteklenmektedir.</sub>
+</p>
+
 <div align="center">
 
 # GIB Framework
 
-Gelir İdaresi Başkanlığı e-Fatura ve e-Arşiv süreçleri için çok kiracılı faturalama platformu
+Gelir İdaresi Başkanlığı e-Fatura ve e-Arşiv süreçleri için çok amaçloı faturalama platformu.
 
-[![CI](https://github.com/hamzadenizyilmaz/GIB-Framework/actions/workflows/ci.yml/badge.svg)](https://github.com/hamzadenizyilmaz/GIB-Framework/actions/workflows/ci.yml)
 ![.NET](https://img.shields.io/badge/.NET-9.0-512BD4?logo=dotnet&logoColor=white)
 ![React](https://img.shields.io/badge/React-19-149ECA?logo=react&logoColor=white)
 ![SQL Server](https://img.shields.io/badge/SQL%20Server-2019%2B-CC2927?logo=microsoftsqlserver&logoColor=white)
