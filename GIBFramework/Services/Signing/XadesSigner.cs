@@ -8,7 +8,7 @@ using GIBFramework.Services.Ubl;
 
 namespace GIBFramework.Services.Signing;
 
-public sealed class XadesSigner(ISigningCertificateProvider certificates, IClock clock) : IXmlSigner
+public sealed class XadesSigner(ISigningCertificateProvider certificates, IClock clock, SigningOptions options, IHostEnvironment environment) : IXmlSigner
 {
     private const string XadesNs = "http://uri.etsi.org/01903/v1.3.2#";
     private const string SignedPropertiesType = "http://uri.etsi.org/01903#SignedProperties";
@@ -62,7 +62,7 @@ public sealed class XadesSigner(ISigningCertificateProvider certificates, IClock
         return document;
     }
 
-    public SignatureVerification Verify(XmlDocument document)
+    public SignatureVerification Verify(XmlDocument document, bool requireTrustedCertificate = false)
     {
         ArgumentNullException.ThrowIfNull(document);
         var nodes = document.GetElementsByTagName("Signature", SignedXml.XmlDsigNamespaceUrl);
@@ -86,23 +86,55 @@ public sealed class XadesSigner(ISigningCertificateProvider certificates, IClock
                 return new SignatureVerification(true, false, null, "İmza belgenin tamamını kapsamıyor (URI=\"\" referansı yok).");
             }
 
-            var cert = signed.KeyInfo.OfType<KeyInfoX509Data>()
+            var chainCertificates = signed.KeyInfo.OfType<KeyInfoX509Data>()
                 .SelectMany(d => d.Certificates?.OfType<X509Certificate2>() ?? [])
-                .FirstOrDefault();
+                .ToArray();
+            var cert = chainCertificates.FirstOrDefault();
             if (cert is null)
             {
                 return new SignatureVerification(true, false, null, "İmzada X509 sertifikası yok.");
             }
 
             var valid = signed.CheckSignature(cert, verifySignatureOnly: true);
-            return new SignatureVerification(true, valid, cert.Subject, valid
-                ? "Kriptografik imza geçerli. Sertifika zinciri (Kamu SM) ve iptal durumu ayrıca doğrulanmalıdır."
-                : "İmza doğrulanamadı: belge imzadan sonra değiştirilmiş olabilir.");
+            if (!valid)
+            {
+                return new SignatureVerification(true, false, cert.Subject, "Belge imzasının bütünlüğü doğrulanamadı.");
+            }
+
+            var requireTrust = requireTrustedCertificate || !(environment.IsDevelopment() || environment.IsEnvironment("Demo"));
+            if (!requireTrust)
+            {
+                return new SignatureVerification(true, true, cert.Subject, null, IntegrityValid: true);
+            }
+
+            var trusted = IsTrusted(cert, chainCertificates);
+            return new SignatureVerification(true, trusted, cert.Subject,
+                trusted ? null : "Sertifika zinciri, geçerlilik veya iptal durumu doğrulanamadı.",
+                IntegrityValid: true, CertificateTrusted: trusted);
         }
         catch (CryptographicException ex)
         {
             return new SignatureVerification(true, false, null, "İmza işlenemedi: " + ex.Message);
         }
+    }
+
+    private bool IsTrusted(X509Certificate2 certificate, X509Certificate2[] intermediates)
+    {
+        using var chain = new X509Chain();
+        chain.ChainPolicy.DisableCertificateDownloads = true;
+        chain.ChainPolicy.VerificationTime = clock.UtcNow.UtcDateTime;
+        chain.ChainPolicy.RevocationFlag = X509RevocationFlag.ExcludeRoot;
+        chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+        chain.ChainPolicy.ExtraStore.AddRange(intermediates.Skip(1).ToArray());
+        if (!chain.Build(certificate) || chain.ChainElements.Count < 2
+            || !options.TrustedRootSha256.Contains(chain.ChainElements[^1].Certificate.GetCertHashString(HashAlgorithmName.SHA256), StringComparer.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        chain.ChainPolicy.RevocationMode = X509RevocationMode.Offline;
+        return chain.Build(certificate)
+            && options.TrustedRootSha256.Contains(chain.ChainElements[^1].Certificate.GetCertHashString(HashAlgorithmName.SHA256), StringComparer.OrdinalIgnoreCase);
     }
 
     private static XmlElement BuildQualifyingProperties(XmlDocument doc, string signatureId, string signedPropertiesId, X509Certificate2 cert, DateTimeOffset signingTime)

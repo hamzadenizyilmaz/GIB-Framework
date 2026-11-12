@@ -10,11 +10,12 @@ public interface ISigningCertificateProvider
     X509Certificate2 GetSigningCertificate();
 }
 
-public sealed record SignatureVerification(bool IsPresent, bool IsValid, string? SignerSubject, string? Problem);
+public sealed record SignatureVerification(bool IsPresent, bool IsValid, string? SignerSubject, string? Problem,
+    bool IntegrityValid = false, bool? CertificateTrusted = null);
 
 public interface IXmlSigner
 {
     XmlDocument Sign(XmlDocument document, string signatureId);
 
-    SignatureVerification Verify(XmlDocument document);
+    SignatureVerification Verify(XmlDocument document, bool requireTrustedCertificate = false);
 }

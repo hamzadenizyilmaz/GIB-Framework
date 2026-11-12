@@ -1,9 +1,9 @@
 import { useEffect } from 'react';
-import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router';
+import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router';
 import { MFA_REQUIRED_EVENT, PASSWORD_CHANGE_EVENT } from './api.js';
 import { AnnouncementPopup } from './components/AnnouncementPopup.jsx';
 import { Layout } from './components/Layout.jsx';
-import { Spinner, useToast } from './components/ui.jsx';
+import { ErrorAlert, Spinner, useToast } from './components/ui.jsx';
 import { useSession } from './session.jsx';
 import { Account, ChangePassword, Login } from './pages/Auth.jsx';
 import { Dashboard } from './pages/Dashboard.jsx';
@@ -72,7 +72,13 @@ function Guard({ policy, children }) {
   if (!session.permissions) return <Navigate to="/login" replace state={{ from: location.pathname }} />;
   if (session.permissions.mustChangePassword && location.pathname !== '/change-password') return <Navigate to="/change-password" replace />;
   if (session.permissions.mfaRequired && !session.permissions.mustChangePassword && location.pathname !== MFA_PAGE) return <Navigate to={MFA_PAGE} replace />;
-  if (policy && !session.can(policy)) return <Navigate to="/" replace />;
+  if (policy && !session.can(policy)) {
+    return <Layout><div role="alert" className="alert alert-warning">
+      <h1 className="h5">403 · Erişim reddedildi</h1>
+      <p>Bu sayfayı açmak için gerekli yetkiniz yok.</p>
+      <Link className="btn btn-outline-secondary" to="/">Ana sayfaya dön</Link>
+    </div></Layout>;
+  }
   return <Layout>{children}</Layout>;
 }
 
@@ -95,6 +101,16 @@ export default function App() {
 
   if (session.loading) {
     return <div className="d-flex justify-content-center align-items-center min-vh-100"><Spinner /></div>;
+  }
+
+  if (session.error) {
+    return <main className="container py-5">
+      <h1 className="h4">Oturum bilgileri yüklenemedi</h1>
+      <ErrorAlert error={session.error} />
+      <button className="btn btn-primary me-2" onClick={session.reload}>Tekrar dene</button>
+      {session.tenantOverride && <button className="btn btn-outline-secondary me-2" onClick={() => session.selectTenant(null)}>Firma seçimini kaldır</button>}
+      <button className="btn btn-outline-secondary" onClick={session.logout}>Oturumu kapat</button>
+    </main>;
   }
 
   return (

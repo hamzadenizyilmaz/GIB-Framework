@@ -198,6 +198,8 @@ public sealed record InvoiceView
     public DateTimeOffset? SignedAt { get; init; }
 
     public string? SignedXmlSha256 { get; init; }
+    public bool Shareable { get; init; }
+    public bool PortalReconciliationRequired { get; init; }
 
     public IssuanceChannel IssuanceChannel { get; init; }
 

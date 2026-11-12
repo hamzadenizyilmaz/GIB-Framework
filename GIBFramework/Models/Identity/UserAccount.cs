@@ -2,6 +2,7 @@ namespace GIBFramework.Models.Identity;
 
 public sealed class UserAccount
 {
+    public byte[] RowVersion { get; set; } = [];
     public Guid Id { get; set; }
 
     public Guid? TenantId { get; set; }

@@ -55,10 +55,10 @@ export function InvoiceForm() {
   const formRef = useRef(null);
   const idempotencyKey = useMemo(() => uuid(), []);
 
-  const { data: refs } = useLoad(async () => {
+  const { data: refs, error: referenceError, reload: reloadReferences } = useLoad(async () => {
     const [defs, settings, products, customers] = await Promise.all([
-      api.get('/api/v1/compliance/tax-definitions').catch(() => ({ vatRates: [20, 10, 1, 0], withholdings: [], exemptions: [] })),
-      api.get('/api/v1/settings').catch(() => ({ defaults: {}, noteTemplates: [], bankAccounts: [] })),
+      api.get('/api/v1/compliance/tax-definitions'),
+      api.get('/api/v1/settings'),
       api.get('/api/v1/products?activeOnly=true').catch(() => []),
       api.get('/api/v1/customers?take=2000').catch(() => []),
     ]);
@@ -113,6 +113,10 @@ export function InvoiceForm() {
     return t;
   }, [lines, ratios]);
 
+  if (referenceError) return <Card title="Fatura ayarları yüklenemedi">
+    <ErrorAlert error={referenceError} />
+    <button className="btn btn-primary" onClick={reloadReferences}>Tekrar dene</button>
+  </Card>;
   if (!refs || !lines) return <Spinner />;
 
   const { defs, settings, products, customers } = refs;

@@ -3,3 +3,6 @@ BEGIN
     CREATE DATABASE [GIBFramework];
 END
 GO
+
+USE [GIBFramework];
+GO

@@ -22,25 +22,28 @@ public sealed partial class MessageDeliveryService(
 
     public async Task<int> SendDueAsync(CancellationToken ct)
     {
-        var batch = await messages.ClaimDueAsync(Math.Clamp(options.BatchSize, 1, 100), clock.UtcNow, TimeSpan.FromMinutes(5), ct);
-        foreach (var message in batch)
+        await messages.ExpireClaimsAsync(clock.UtcNow, ct);
+        var count = 0;
+        while (count < Math.Clamp(options.BatchSize, 1, 100)
+            && (await messages.ClaimDueAsync(1, clock.UtcNow, TimeSpan.FromMinutes(5), ct)).FirstOrDefault() is { } message)
         {
             await DeliverAsync(message, ct);
+            count++;
         }
 
-        return batch.Count;
+        return count;
     }
 
     public async Task DeliverAsync(OutboundMessage message, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(message);
+        string providerId;
         try
         {
             var config = await settings.GetAsync(message.TenantId, ct);
-            var providerId = message.Channel == MessageChannel.Email
+            providerId = message.Channel == MessageChannel.Email
                 ? await SendEmailAsync(message, config, ct)
                 : await SendSmsAsync(message, config, ct);
-            await messages.MarkSentAsync(message.Id, providerId, clock.UtcNow, ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
@@ -54,8 +57,24 @@ public sealed partial class MessageDeliveryService(
             DateTimeOffset? retry = transient && message.Attempts < Math.Max(1, options.MaxAttempts)
                 ? clock.UtcNow.Add(Backoff[Math.Clamp(message.Attempts - 1, 0, Backoff.Length - 1)])
                 : null;
+            if (retry is { } next && ex is NetgsmException { RetryAfter: { } delay })
+            {
+                var providerRetry = clock.UtcNow.Add(delay);
+                if (providerRetry > next) retry = providerRetry;
+            }
             Log.DeliveryFailed(logger, message.Id, message.Channel, ex.Message);
-            await messages.MarkFailedAsync(message.Id, ex.Message, retry, CancellationToken.None);
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            if (!await messages.MarkFailedAsync(message, ex.Message, retry, deadline.Token))
+            {
+                logger.LogWarning("Mesaj {MessageId} için işlem kirası sona erdi.", message.Id);
+            }
+            return;
+        }
+
+        using var acceptedDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        if (!await messages.MarkSentAsync(message, providerId, clock.UtcNow, acceptedDeadline.Token))
+        {
+            logger.LogWarning("Sağlayıcı mesaj {MessageId} öğesini kabul etti. İşlem kirası sona erdi.", message.Id);
         }
     }
 

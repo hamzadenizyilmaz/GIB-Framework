@@ -1,5 +1,4 @@
 {
-  // VUK fatura düzeni kuralları (doğrulama). Parasal hadler yıllık versiyonlanır.
   "rules": [
     {
       "code": "VUK-230",

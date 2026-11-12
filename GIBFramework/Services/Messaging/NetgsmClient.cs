@@ -2,6 +2,8 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Xml;
+using System.Xml.Linq;
 
 namespace GIBFramework.Services.Messaging;
 
@@ -9,11 +11,12 @@ public sealed record NetgsmCredentials(string UserCode, string Password, string?
 
 public sealed record NetgsmBalanceItem(string Name, string Amount);
 
-public sealed class NetgsmException(string code, string message, bool transient = false) : Exception(message)
+public sealed class NetgsmException(string code, string message, bool transient = false, TimeSpan? retryAfter = null) : Exception(message)
 {
     public string Code { get; } = code;
 
     public bool Transient { get; } = transient;
+    public TimeSpan? RetryAfter { get; } = retryAfter;
 }
 
 public sealed class NetgsmClient(IHttpClientFactory httpFactory, MessagingOptions options)
@@ -122,7 +125,13 @@ public sealed class NetgsmClient(IHttpClientFactory httpFactory, MessagingOption
                 Encoding.UTF8,
                 "application/json"),
         };
-        using var doc = await SendCoreAsync<JsonDocument>(request, ct);
+        var text = await SendTextAsync(request, ct);
+        if (text.AsSpan().TrimStart().StartsWith("<", StringComparison.Ordinal))
+        {
+            return ParseXmlBalance(text);
+        }
+
+        using var doc = ParseResponse<JsonDocument>(text);
         var root = doc.RootElement;
         if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("balance", out var balance) && balance.ValueKind == JsonValueKind.Array)
         {
@@ -134,6 +143,30 @@ public sealed class NetgsmClient(IHttpClientFactory httpFactory, MessagingOption
         throw Fail(Prop(root, "code") ?? "?", null);
     }
 
+    private static IReadOnlyList<NetgsmBalanceItem> ParseXmlBalance(string text)
+    {
+        try
+        {
+            using var reader = XmlReader.Create(new StringReader(text), new XmlReaderSettings
+            {
+                DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = 100_000,
+            });
+            var root = XDocument.Load(reader).Root;
+            if (root?.Name.LocalName == "results")
+            {
+                return [.. root.Elements("result").Where(result => result.Element("amount") is not null)
+                    .Select(result => new NetgsmBalanceItem((string?)result.Element("balance_name") ?? "Bakiye",
+                        (string)result.Element("amount")!))];
+            }
+
+            throw Fail((string?)root?.Element("code"), null);
+        }
+        catch (XmlException)
+        {
+            throw new NetgsmException("FORMAT", "Netgsm bakiye yanıtı okunamadı.");
+        }
+    }
+
     private static NetgsmException Fail(string? code, string? description)
     {
         code ??= "?";
@@ -141,7 +174,10 @@ public sealed class NetgsmClient(IHttpClientFactory httpFactory, MessagingOption
         return new NetgsmException(code, known, transient: code is "80" or "85" or "100" or "101");
     }
 
-    private async Task<T> SendCoreAsync<T>(HttpRequestMessage request, CancellationToken ct)
+    private async Task<T> SendCoreAsync<T>(HttpRequestMessage request, CancellationToken ct) =>
+        ParseResponse<T>(await SendTextAsync(request, ct));
+
+    private async Task<string> SendTextAsync(HttpRequestMessage request, CancellationToken ct)
     {
         var client = httpFactory.CreateClient(HttpClientName);
         HttpResponseMessage response;
@@ -149,32 +185,43 @@ public sealed class NetgsmClient(IHttpClientFactory httpFactory, MessagingOption
         {
             response = await client.SendAsync(request, ct);
         }
-        catch (HttpRequestException ex)
+        catch (HttpRequestException)
         {
-            throw new NetgsmException("NETWORK", "Netgsm'e bağlanılamadı: " + ex.Message, transient: true);
+            throw new NetgsmException("NETWORK", "Netgsm teslimat sonucu doğrulanamadı.");
         }
         catch (TaskCanceledException) when (!ct.IsCancellationRequested)
         {
-            throw new NetgsmException("TIMEOUT", "Netgsm zamanında yanıt vermedi.", transient: true);
+            throw new NetgsmException("TIMEOUT", "Netgsm zamanında yanıt vermedi. Teslimat sonucu doğrulanamadı.");
         }
 
         using (response)
         {
-            var text = await response.Content.ReadAsStringAsync(ct);
-            if ((int)response.StatusCode >= 500)
+            var status = (int)response.StatusCode;
+            if (status == 429)
             {
-                throw new NetgsmException("HTTP" + (int)response.StatusCode, $"Netgsm HTTP {(int)response.StatusCode} döndürdü.", transient: true);
+                var retry = response.Headers.RetryAfter;
+                throw new NetgsmException("HTTP429", "Netgsm istek sınırı aşıldı.", transient: true,
+                    retryAfter: retry?.Delta ?? (retry?.Date is { } date ? date - DateTimeOffset.UtcNow : null));
+            }
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new NetgsmException("HTTP" + status, $"Netgsm HTTP {status} döndürdü.");
             }
 
-            try
-            {
-                return JsonSerializer.Deserialize<T>(text, Json) ?? throw new JsonException("Boş yanıt");
-            }
-            catch (JsonException)
-            {
-                var code = text.Trim().Split(' ', 2)[0];
-                throw Fail(code.Length is > 0 and <= 3 ? code : "?", code.Length > 3 ? text.Trim()[..Math.Min(200, text.Trim().Length)] : null);
-            }
+            return await response.Content.ReadAsStringAsync(ct);
+        }
+    }
+
+    private static T ParseResponse<T>(string text)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<T>(text, Json) ?? throw new JsonException("Boş yanıt");
+        }
+        catch (JsonException)
+        {
+            var code = text.Trim().Split(' ', 2)[0];
+            throw Fail(code.Length is > 0 and <= 3 && code.All(char.IsAsciiDigit) ? code : "?", null);
         }
     }
 

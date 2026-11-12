@@ -16,6 +16,12 @@ public abstract partial class PeriodicWorker(IServiceScopeFactory scopes, ILogge
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        await using (var startup = scopes.CreateAsyncScope())
+        {
+            var database = startup.ServiceProvider.GetRequiredService<DatabaseInitialization>();
+            if (!database.Configured) return;
+            await database.WaitAsync(stoppingToken);
+        }
         using var timer = new PeriodicTimer(Interval);
         do
         {

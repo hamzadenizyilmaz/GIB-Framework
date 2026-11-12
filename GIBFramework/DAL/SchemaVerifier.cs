@@ -4,9 +4,10 @@ namespace GIBFramework.DAL;
 
 public sealed class SchemaVerifier(DatabaseOptions options)
 {
-    public const int RequiredVersion = 4;
+    public const int RequiredVersion = 5;
 
-    private const string Hint = "database/GIBFramework_TamKurulum.sql dosyasını çalıştırın (veya: powershell -File database/Kurulum.ps1).";
+    private const string InstallHint = "Boş veritabanında database/GIBFramework_Plesk.sql dosyasını çalıştırın.";
+    private const string UpgradeHint = "Şema 4 için database/06_Sema5.sql dosyasını ALTER ANY SECURITY POLICY yetkili bir veritabanı yöneticisi çalıştırmalıdır.";
 
     public async Task VerifyAsync(CancellationToken cancellationToken)
     {
@@ -21,13 +22,14 @@ public sealed class SchemaVerifier(DatabaseOptions options)
         }
         catch (SqlException ex) when (ex.Number is 4060 or 208)
         {
-            throw new InvalidOperationException($"GIB Framework veritabanı veya şeması bulunamadı. {Hint}", ex);
+            throw new InvalidOperationException($"GIB Framework veritabanı veya şeması bulunamadı. {InstallHint}", ex);
         }
 
         if (version is null || version < RequiredVersion)
         {
+            var hint = version is null ? InstallHint : UpgradeHint;
             throw new InvalidOperationException(
-                $"Veritabanı şema sürümü {version?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "yok"}; en az {RequiredVersion} gerekli. {Hint}");
+                $"Veritabanı şema sürümü {version?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "yok"}; en az {RequiredVersion} gerekli. {hint}");
         }
     }
 }

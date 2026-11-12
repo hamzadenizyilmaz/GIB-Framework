@@ -10,7 +10,7 @@ namespace GIBFramework.Controllers;
 [ApiController]
 [Route("api/v1/invoices")]
 [Authorize(Policy = Policies.InvoiceRead)]
-public sealed class InvoicesController(InvoiceService service) : ControllerBase
+public sealed class InvoicesController(InvoiceService service, IAuthorizationService authorization, ITenantContext context, WorkflowOptions workflow) : ControllerBase
 {
     private static readonly string[] FullDataRoles =
     [
@@ -61,6 +61,27 @@ public sealed class InvoicesController(InvoiceService service) : ControllerBase
     [HttpGet("{id:guid}")]
     public async Task<InvoiceView> Get(Guid id, CancellationToken ct) => (await service.GetAsync(id, ct)).ToView(Mask);
 
+    [HttpGet("overview")]
+    public Task<IReadOnlyList<InvoiceOverviewRow>> Overview(CancellationToken ct) => service.OverviewAsync(ct);
+
+    [HttpGet("tasks/{task}")]
+    public async Task<ActionResult<InvoicePage>> Tasks(string task, [FromQuery] int skip = 0, [FromQuery] int take = 5, CancellationToken ct = default)
+    {
+        var policy = task switch
+        {
+            "approve" => Policies.InvoiceApprove,
+            "sign" => Policies.InvoiceSign,
+            "send" => Policies.InvoiceTransmit,
+            "draft" => Policies.InvoiceCreate,
+            _ => null,
+        };
+        if (policy is null) return NotFound();
+        if (!(await authorization.AuthorizeAsync(User, policy)).Succeeded) return Forbid();
+        var excludeSelf = task == "approve" && workflow.RequireMakerChecker && !context.Roles.Any(workflow.SelfApprovalRoles.Contains);
+        var actor = task == "draft" || excludeSelf ? context.RequireUser() : null;
+        return await service.ListAsync(new InvoiceQuery(null, null, null, null, Math.Clamp(take, 1, 100), skip, Task: task, Actor: actor), ct);
+    }
+
     [HttpGet("{id:guid}/decision")]
     public async Task<ActionResult<DecisionView>> Decision(Guid id, CancellationToken ct)
     {
@@ -80,16 +101,16 @@ public sealed class InvoicesController(InvoiceService service) : ControllerBase
     public async Task<InvoiceView> Submit(Guid id, CancellationToken ct) => (await service.SubmitAsync(id, ct)).ToView(Mask);
 
     [HttpPost("{id:guid}/approve")]
-    [Authorize(Policy = Policies.InvoiceApprove)]
+    [Authorize(Policy = Policies.InvoiceApprove, AuthenticationSchemes = "Bearer")]
     public async Task<InvoiceView> Approve(Guid id, CancellationToken ct) => (await service.ApproveAsync(id, ct)).ToView(Mask);
 
     [HttpPost("{id:guid}/reject")]
-    [Authorize(Policy = Policies.InvoiceApprove)]
+    [Authorize(Policy = Policies.InvoiceApprove, AuthenticationSchemes = "Bearer")]
     public async Task<InvoiceView> Reject(Guid id, [FromBody] ReasonRequest request, CancellationToken ct) =>
         (await service.RejectAsync(id, request.Reason, ct)).ToView(Mask);
 
     [HttpPost("{id:guid}/sign")]
-    [Authorize(Policy = Policies.InvoiceSign)]
+    [Authorize(Policy = Policies.InvoiceSign, AuthenticationSchemes = "Bearer")]
     public async Task<InvoiceView> Sign(Guid id, CancellationToken ct) => (await service.SignAsync(id, ct)).ToView(Mask);
 
     [HttpPost("{id:guid}/transmit")]

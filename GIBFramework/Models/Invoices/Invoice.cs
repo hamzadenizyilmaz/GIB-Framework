@@ -196,6 +196,9 @@ public sealed class Invoice
     public IssuanceChannel IssuanceChannel { get; set; } = IssuanceChannel.Integrator;
 
     public GibPortalEnvironment? PortalEnvironment { get; set; }
+    public bool PortalEvidenceVerified { get; set; }
+    public bool PortalSignatureRequested { get; set; }
+    public bool PortalApprovalPending { get; set; }
 
     public InvoiceTotals Totals { get; set; } = new();
 

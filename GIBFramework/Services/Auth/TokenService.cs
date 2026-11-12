@@ -31,7 +31,7 @@ public sealed class TokenService(JwtOptions options, IClock clock)
     }
 
     public string Issue(string userId, Guid? tenantId, IReadOnlyCollection<string> roles, TimeSpan? lifetime = null) =>
-        Create(userId, userId, tenantId, roles, [], lifetime ?? TimeSpan.FromHours(8)).AccessToken;
+        Create(userId, userId, tenantId, roles, [new Claim(AuthMethodClaim, "dev")], lifetime ?? TimeSpan.FromHours(8)).AccessToken;
 
     private IssuedToken Create(string subject, string name, Guid? tenantId, IReadOnlyCollection<string> roles, IEnumerable<Claim> extra, TimeSpan lifetime)
     {

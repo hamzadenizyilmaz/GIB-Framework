@@ -17,7 +17,7 @@ public sealed record GibPortalSignRequest([StringLength(6)] string? SmsCode);
 
 [ApiController]
 [Route("api/v1/gib-portal")]
-[Authorize(Policy = Policies.GibPortal)]
+[Authorize(Policy = Policies.GibPortal, AuthenticationSchemes = "Bearer")]
 public sealed class GibPortalController(GibPortalService portal) : ControllerBase
 {
     [HttpGet("status")]

@@ -1,11 +1,12 @@
 using GIBFramework.Base.Extensions;
+using GIBFramework.DAL.Tenants;
 using GIBFramework.Infrastructure.Tenancy;
 
 namespace GIBFramework.Middleware;
 
 public sealed class TenantContextMiddleware(RequestDelegate next)
 {
-    public async Task InvokeAsync(HttpContext context, RequestTenantContext tenant)
+    public async Task InvokeAsync(HttpContext context, RequestTenantContext tenant, ITenantRepository tenants)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(tenant);
@@ -14,8 +15,16 @@ public sealed class TenantContextMiddleware(RequestDelegate next)
         {
             var tenantId = context.User.GetTenantId();
             if (context.User.IsInRole(Roles.PlatformSuperAdmin)
-                && Guid.TryParse(context.Request.Headers[GibFrameworkHeaders.TenantId].ToString(), out var overrideId))
+                && context.Request.Headers.TryGetValue(GibFrameworkHeaders.TenantId, out var value))
             {
+                if (!Guid.TryParse(value.ToString(), out var overrideId) || overrideId == Guid.Empty)
+                {
+                    throw new ValidationFailedException("TENANT_OVERRIDE", "Firma kimliği geçersiz.", []);
+                }
+                if (await tenants.GetAsync(overrideId, context.RequestAborted) is not { IsActive: true })
+                {
+                    throw new NotFoundException("Etkin firma bulunamadı.");
+                }
                 tenantId = overrideId;
             }
 

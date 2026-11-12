@@ -22,22 +22,28 @@ public sealed partial class EventRouter(
 
     public async Task<int> ProcessPendingAsync(CancellationToken ct)
     {
-        var batch = await events.PendingAsync(50, ct);
-        foreach (var evt in batch)
+        var count = 0;
+        while (count < 50 && await events.ClaimAsync(clock.UtcNow, ct) is { } evt)
         {
+            count++;
+            string? error = null;
             try
             {
                 await HandleAsync(evt, ct);
-                await events.CompleteAsync(evt.Id, null, clock.UtcNow, finished: true, ct);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 Log.EventFailed(logger, evt.Id, evt.EventType, ex);
-                await events.CompleteAsync(evt.Id, ex.Message, clock.UtcNow, finished: evt.Attempts + 1 >= MaxAttempts, CancellationToken.None);
+                error = ex.Message;
+            }
+
+            if (!await events.CompleteAsync(evt, error, clock.UtcNow, error is null || evt.Attempts >= MaxAttempts, ct))
+            {
+                logger.LogWarning("Olay {EventId} için işlem kirası başka bir işçiye geçti.", evt.Id);
             }
         }
 
-        return batch.Count;
+        return count;
     }
 
     public static Dictionary<string, string?> InvoiceValues(Invoice invoice, string publicLink, string panelLink) => new(StringComparer.Ordinal)
@@ -68,7 +74,7 @@ public sealed partial class EventRouter(
         }
 
         var payload = JsonDefaults.Deserialize<InvoiceEventPayload>(evt.PayloadJson);
-        var publicLink = documents.PublicLink(tenantId, invoice.Id);
+        var publicLink = await documents.HasShareableEvidenceAsync(invoice, ct) ? documents.PublicLink(tenantId, invoice.Id) : string.Empty;
         var panelLink = documents.PanelLink(invoice.Id);
         var values = InvoiceValues(invoice, publicLink, panelLink);
         values["neden"] = payload.Note ?? invoice.LastError;
@@ -79,28 +85,28 @@ public sealed partial class EventRouter(
             case InvoiceEvents.AwaitingApproval:
                 var approvers = await UsersWithPolicyAsync(tenantId, Policies.InvoiceApprove, ct);
                 var others = approvers.Where(u => !string.Equals(u.UserCode, invoice.CreatedBy, StringComparison.OrdinalIgnoreCase)).ToList();
-                await NotifyUsersAsync(tenantId, TemplateKeys.InvoiceAwaitingApproval, others.Count > 0 ? others : approvers, values, invoice, ct);
+                await NotifyUsersAsync(tenantId, TemplateKeys.InvoiceAwaitingApproval, others.Count > 0 ? others : approvers, values, invoice, evt.Id, ct);
                 break;
             case InvoiceEvents.Rejected:
-                await NotifyUsersAsync(tenantId, TemplateKeys.InvoiceRejected, await CreatorAsync(invoice, ct), values, invoice, ct);
+                await NotifyUsersAsync(tenantId, TemplateKeys.InvoiceRejected, await CreatorAsync(invoice, ct), values, invoice, evt.Id, ct);
                 break;
             case InvoiceEvents.Failed:
                 values["neden"] = invoice.LastError ?? payload.Note;
-                await NotifyUsersAsync(tenantId, TemplateKeys.InvoiceFailed, await CreatorAsync(invoice, ct), values, invoice, ct);
+                await NotifyUsersAsync(tenantId, TemplateKeys.InvoiceFailed, await CreatorAsync(invoice, ct), values, invoice, evt.Id, ct);
                 break;
-            case InvoiceEvents.Issued:
+            case InvoiceEvents.Issued when publicLink.Length > 0:
                 await NotifyCustomerAsync(tenantId, TemplateKeys.InvoiceIssued, invoice, values,
-                    [new MessageAttachmentRef("InvoicePdf", invoice.Id), new MessageAttachmentRef("InvoiceHtml", invoice.Id), new MessageAttachmentRef("InvoiceXml", invoice.Id)], ct);
+                    [new MessageAttachmentRef("InvoicePdf", invoice.Id), new MessageAttachmentRef("InvoiceHtml", invoice.Id), new MessageAttachmentRef("InvoiceXml", invoice.Id)], evt.Id, ct);
                 break;
             case InvoiceEvents.Cancelled:
-                await NotifyCustomerAsync(tenantId, TemplateKeys.InvoiceCancelled, invoice, values, [], ct);
+                await NotifyCustomerAsync(tenantId, TemplateKeys.InvoiceCancelled, invoice, values, [], evt.Id, ct);
                 break;
         }
 
-        await integrations.RouteAsync(new OutboxEventContext(evt.EventType, invoice, payload.Note, publicLink, panelLink), ct);
+        await integrations.RouteAsync(new OutboxEventContext(evt.Id, evt.EventType, invoice, payload.Note, publicLink, panelLink), ct);
     }
 
-    private async Task NotifyCustomerAsync(Guid tenantId, string template, Invoice invoice, Dictionary<string, string?> values, IReadOnlyList<MessageAttachmentRef> attachments, CancellationToken ct)
+    private async Task NotifyCustomerAsync(Guid tenantId, string template, Invoice invoice, Dictionary<string, string?> values, IReadOnlyList<MessageAttachmentRef> attachments, long eventId, CancellationToken ct)
     {
         var c = invoice.Customer;
         if (string.IsNullOrWhiteSpace(c.Email) && string.IsNullOrWhiteSpace(c.Phone))
@@ -110,10 +116,10 @@ public sealed partial class EventRouter(
 
         values["kullanici.ad"] = c.Title;
         await notifications.NotifyAsync(new NotificationRequest(tenantId, template, [new NotificationRecipient(c.Title, c.Email, c.Phone)], values, "system",
-            "Invoice", invoice.Id.ToString(), attachments), ct);
+            "Invoice", invoice.Id.ToString(), attachments, OutboxEventId: eventId), ct);
     }
 
-    private async Task NotifyUsersAsync(Guid tenantId, string template, IReadOnlyList<UserAccount> recipients, Dictionary<string, string?> values, Invoice invoice, CancellationToken ct)
+    private async Task NotifyUsersAsync(Guid tenantId, string template, IReadOnlyList<UserAccount> recipients, Dictionary<string, string?> values, Invoice invoice, long eventId, CancellationToken ct)
     {
         if (recipients.Count == 0)
         {
@@ -129,7 +135,7 @@ public sealed partial class EventRouter(
                 ["kullanici.kod"] = user.UserCode,
             };
             await notifications.NotifyAsync(new NotificationRequest(tenantId, template, [new NotificationRecipient(user.DisplayName, user.Email, user.Phone)], scoped, "system",
-                "Invoice", invoice.Id.ToString()), ct);
+                "Invoice", invoice.Id.ToString(), OutboxEventId: eventId), ct);
         }
     }
 

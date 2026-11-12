@@ -33,7 +33,7 @@ public sealed class PasswordChangeMiddleware(RequestDelegate next)
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(policies);
         var method = context.User.FindFirst(TokenService.AuthMethodClaim)?.Value;
-        if (method is null || method == "mfa"
+        if (method != "pwd"
             || !Guid.TryParse(context.User.FindFirst(GibFrameworkClaims.TenantId)?.Value, out var tenantId))
         {
             return false;

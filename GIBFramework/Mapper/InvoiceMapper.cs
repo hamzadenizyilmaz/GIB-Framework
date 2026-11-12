@@ -115,6 +115,8 @@ public static class InvoiceMapper
             SignedBy = invoice.SignedBy,
             SignedAt = invoice.SignedAt,
             SignedXmlSha256 = invoice.SignedXmlSha256,
+            Shareable = Services.Messaging.InvoiceDocumentService.IsShareable(invoice),
+            PortalReconciliationRequired = invoice.PortalSignatureRequested || invoice.PortalApprovalPending,
             IssuanceChannel = invoice.IssuanceChannel,
             PortalEnvironment = invoice.PortalEnvironment,
             DespatchNumber = invoice.DespatchNumber,

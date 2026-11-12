@@ -30,16 +30,22 @@ public sealed class OutboxEventRepository(SqlConnectionFactory connections)
         await Bind(cmd, tenantId, eventType, entityType, entityId, payloadJson, at).ExecuteNonQueryAsync(ct);
     }
 
-    public async Task<IReadOnlyList<OutboxEvent>> PendingAsync(int take, CancellationToken ct)
+    public async Task<OutboxEvent?> ClaimAsync(DateTimeOffset now, CancellationToken ct)
     {
         await using var c = await connections.OpenSystemAsync(ct);
-        await using var cmd = c.Command("SELECT TOP (@n) * FROM dbo.OutboxEvents WHERE ProcessedAt IS NULL ORDER BY Id");
-        cmd.With("@n", take);
-        var list = new List<OutboxEvent>();
+        await using var cmd = c.Command("""
+            WITH due AS (
+                SELECT TOP (1) * FROM dbo.OutboxEvents WITH (UPDLOCK, READPAST, READCOMMITTEDLOCK)
+                WHERE ProcessedAt IS NULL AND (LeaseUntil IS NULL OR LeaseUntil <= @now)
+                  AND (NextAttemptAt IS NULL OR NextAttemptAt <= @now)
+                ORDER BY Id)
+            UPDATE due SET LeaseId = @leaseId, LeaseUntil = @leaseUntil, Attempts = Attempts + 1
+            OUTPUT inserted.*
+            """);
+        cmd.With("@now", now).With("@leaseId", Guid.NewGuid()).With("@leaseUntil", now.AddMinutes(5));
         await using var r = await cmd.ExecuteReaderAsync(ct);
-        while (await r.ReadAsync(ct))
-        {
-            list.Add(new OutboxEvent(
+        return await r.ReadAsync(ct)
+            ? new OutboxEvent(
                 r.Get<long>("Id"),
                 r.IsDBNull(r.GetOrdinal("TenantId")) ? null : r.Get<Guid>("TenantId"),
                 r.Get<string>("EventType"),
@@ -47,21 +53,21 @@ public sealed class OutboxEventRepository(SqlConnectionFactory connections)
                 r.Get<string>("EntityId"),
                 r.Get<string>("PayloadJson"),
                 r.Get<DateTimeOffset>("CreatedAt"),
-                r.Get<int>("Attempts")));
-        }
-
-        return list;
+                r.Get<int>("Attempts"), r.Get<Guid>("LeaseId"))
+            : null;
     }
 
-    public async Task CompleteAsync(long id, string? error, DateTimeOffset at, bool finished, CancellationToken ct)
+    public async Task<bool> CompleteAsync(OutboxEvent evt, string? error, DateTimeOffset at, bool finished, CancellationToken ct)
     {
         await using var c = await connections.OpenSystemAsync(ct);
         await using var cmd = c.Command("""
             UPDATE dbo.OutboxEvents
-               SET Attempts = Attempts + 1, LastError = @e, ProcessedAt = CASE WHEN @f = 1 THEN @at ELSE NULL END
-             WHERE Id = @id
+               SET LastError = @e, ProcessedAt = CASE WHEN @f = 1 THEN @at ELSE NULL END,
+                   NextAttemptAt = CASE WHEN @f = 0 THEN @retry ELSE NULL END, LeaseId = NULL, LeaseUntil = NULL
+             WHERE Id = @id AND LeaseId = @leaseId
             """);
-        await cmd.With("@id", id).With("@e", error is null ? null : Truncate(error, 2000)).With("@f", finished).With("@at", at).ExecuteNonQueryAsync(ct);
+        return await cmd.With("@id", evt.Id).With("@leaseId", evt.LeaseId).With("@e", error is null ? null : Truncate(error, 2000))
+            .With("@f", finished).With("@at", at).With("@retry", at.AddMinutes(evt.Attempts)).ExecuteNonQueryAsync(ct) == 1;
     }
 
     private static SqlCommand Bind(SqlCommand cmd, Guid? tenantId, string eventType, string entityType, string entityId, string payloadJson, DateTimeOffset at) =>
@@ -72,19 +78,22 @@ public sealed class OutboxEventRepository(SqlConnectionFactory connections)
 
 public sealed class MessageRepository(SqlConnectionFactory connections)
 {
-    public async Task InsertAsync(OutboundMessage m, CancellationToken ct)
+    public async Task<bool> InsertAsync(OutboundMessage m, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(m);
-        await using var c = await connections.OpenSystemAsync(ct);
+        await using var c = m.TenantId is { } tenantId ? await connections.OpenForTenantAsync(tenantId, ct) : await connections.OpenSystemAsync(ct);
         await using var cmd = c.Command("""
             INSERT dbo.Messages (Id, TenantId, Channel, Recipient, RecipientName, Subject, Body, TemplateKey, EntityType, EntityId, AttachmentsJson,
-                                 Status, Attempts, NextAttemptAt, CreatedBy, CreatedAt)
-            VALUES (@id, @t, @ch, @to, @name, @sub, @body, @tk, @et, @eid, @x, @st, 0, @next, @by, @at)
+                                 Status, Attempts, NextAttemptAt, CreatedBy, CreatedAt, OutboxEventId)
+            SELECT @id, @t, @ch, @to, @name, @sub, @body, @tk, @et, @eid, @x, @st, 0, @next, @by, @at, @outbox
+            WHERE @outbox IS NULL OR NOT EXISTS (
+                SELECT 1 FROM dbo.Messages WITH (UPDLOCK, HOLDLOCK)
+                WHERE OutboxEventId = @outbox AND Channel = @ch AND Recipient = @to)
             """);
-        await cmd.With("@id", m.Id).With("@t", m.TenantId).With("@ch", m.Channel.ToString()).With("@to", m.Recipient).With("@name", m.RecipientName)
+        return await cmd.With("@id", m.Id).With("@t", m.TenantId).With("@ch", m.Channel.ToString()).With("@to", m.Recipient).With("@name", m.RecipientName)
             .With("@sub", m.Subject).WithMax("@body", m.Body).With("@tk", m.TemplateKey).With("@et", m.EntityType).With("@eid", m.EntityId)
             .WithMax("@x", JsonDefaults.Serialize(m.Extras)).With("@st", m.Status.ToString()).With("@next", m.NextAttemptAt)
-            .With("@by", m.CreatedBy).With("@at", m.CreatedAt).ExecuteNonQueryAsync(ct);
+            .With("@by", m.CreatedBy).With("@at", m.CreatedAt).With("@outbox", m.OutboxEventId).ExecuteNonQueryAsync(ct) == 1;
     }
 
     public async Task<IReadOnlyList<OutboundMessage>> ClaimDueAsync(int take, DateTimeOffset now, TimeSpan lease, CancellationToken ct)
@@ -92,34 +101,47 @@ public sealed class MessageRepository(SqlConnectionFactory connections)
         await using var c = await connections.OpenSystemAsync(ct);
         await using var cmd = c.Command("""
             WITH due AS (
-                SELECT TOP (@n) * FROM dbo.Messages WITH (ROWLOCK, UPDLOCK, READPAST)
-                 WHERE Status IN ('Queued','Sending') AND NextAttemptAt <= @now
-                 ORDER BY NextAttemptAt)
-            UPDATE due SET Status = 'Sending', Attempts = Attempts + 1, NextAttemptAt = @lease
+                SELECT TOP (@n) * FROM dbo.Messages WITH (UPDLOCK, READPAST, READCOMMITTEDLOCK)
+                 WHERE Status = 'Queued' AND NextAttemptAt <= @now
+                 ORDER BY NextAttemptAt, Id)
+            UPDATE due SET Status = 'Sending', Attempts = Attempts + 1, NextAttemptAt = @lease, LeaseId = @leaseId
             OUTPUT inserted.*
             """);
-        cmd.With("@n", take).With("@now", now).With("@lease", now.Add(lease));
+        cmd.With("@n", take).With("@now", now).With("@lease", now.Add(lease)).With("@leaseId", Guid.NewGuid());
         return await ReadAllAsync(cmd, ct);
     }
 
-    public async Task MarkSentAsync(Guid id, string? providerId, DateTimeOffset at, CancellationToken ct)
+    public async Task<bool> MarkSentAsync(OutboundMessage message, string? providerId, DateTimeOffset at, CancellationToken ct)
     {
         await using var c = await connections.OpenSystemAsync(ct);
-        await using var cmd = c.Command("UPDATE dbo.Messages SET Status = 'Sent', SentAt = @at, ProviderMessageId = @p, LastError = NULL WHERE Id = @id");
-        await cmd.With("@id", id).With("@at", at).With("@p", providerId is null ? null : OutboxEventRepository.Truncate(providerId, 200)).ExecuteNonQueryAsync(ct);
+        await using var cmd = c.Command("UPDATE dbo.Messages SET Status = 'Sent', SentAt = @at, ProviderMessageId = @p, LastError = NULL, LeaseId = NULL WHERE Id = @id AND LeaseId = @leaseId");
+        return await cmd.With("@id", message.Id).With("@leaseId", message.LeaseId).With("@at", at)
+            .With("@p", providerId is null ? null : OutboxEventRepository.Truncate(providerId, 200)).ExecuteNonQueryAsync(ct) == 1;
     }
 
-    public async Task MarkFailedAsync(Guid id, string error, DateTimeOffset? retryAt, CancellationToken ct)
+    public async Task<bool> MarkFailedAsync(OutboundMessage message, string error, DateTimeOffset? retryAt, CancellationToken ct)
     {
         await using var c = await connections.OpenSystemAsync(ct);
         await using var cmd = c.Command("""
             UPDATE dbo.Messages
                SET Status = CASE WHEN @retry IS NULL THEN 'Failed' ELSE 'Queued' END,
                    NextAttemptAt = COALESCE(@retry, NextAttemptAt),
-                   LastError = @e
-             WHERE Id = @id
+                   LastError = @e, LeaseId = NULL
+             WHERE Id = @id AND LeaseId = @leaseId
             """);
-        await cmd.With("@id", id).With("@retry", retryAt).With("@e", OutboxEventRepository.Truncate(error, 2000)).ExecuteNonQueryAsync(ct);
+        return await cmd.With("@id", message.Id).With("@leaseId", message.LeaseId).With("@retry", retryAt)
+            .With("@e", OutboxEventRepository.Truncate(error, 2000)).ExecuteNonQueryAsync(ct) == 1;
+    }
+
+    public async Task ExpireClaimsAsync(DateTimeOffset now, CancellationToken ct)
+    {
+        await using var c = await connections.OpenSystemAsync(ct);
+        await using var cmd = c.Command("""
+            UPDATE dbo.Messages SET Status = 'Failed', LeaseId = NULL,
+                LastError = N'Teslimat sonucu belirsiz. Yeniden göndermeden önce sağlayıcı kaydını doğrulayın.'
+            WHERE Status = 'Sending' AND NextAttemptAt <= @now
+            """);
+        await cmd.With("@now", now).ExecuteNonQueryAsync(ct);
     }
 
     public async Task<bool> RequeueAsync(Guid? tenantId, Guid id, DateTimeOffset now, CancellationToken ct)
@@ -196,6 +218,7 @@ public sealed class MessageRepository(SqlConnectionFactory connections)
             list.Add(new OutboundMessage
             {
                 Id = r.Get<Guid>("Id"),
+                LeaseId = r.IsDBNull(r.GetOrdinal("LeaseId")) ? null : r.Get<Guid>("LeaseId"),
                 TenantId = r.IsDBNull(r.GetOrdinal("TenantId")) ? null : r.Get<Guid>("TenantId"),
                 Channel = Enum.Parse<MessageChannel>(r.Get<string>("Channel")),
                 Recipient = r.Get<string>("Recipient"),
@@ -225,7 +248,7 @@ public sealed class TenantLogoRepository(SqlConnectionFactory connections)
 {
     public async Task<TenantLogo?> GetAsync(Guid tenantId, CancellationToken ct)
     {
-        await using var c = await connections.OpenSystemAsync(ct);
+        await using var c = await connections.OpenForTenantAsync(tenantId, ct);
         await using var cmd = c.Command("SELECT ContentType, Data, Sha256, UpdatedAt FROM dbo.TenantLogos WHERE TenantId = @t");
         cmd.With("@t", tenantId);
         await using var r = await cmd.ExecuteReaderAsync(ct);
@@ -236,7 +259,7 @@ public sealed class TenantLogoRepository(SqlConnectionFactory connections)
 
     public async Task<(string Sha256, DateTimeOffset UpdatedAt)?> InfoAsync(Guid tenantId, CancellationToken ct)
     {
-        await using var c = await connections.OpenSystemAsync(ct);
+        await using var c = await connections.OpenForTenantAsync(tenantId, ct);
         await using var cmd = c.Command("SELECT Sha256, UpdatedAt FROM dbo.TenantLogos WHERE TenantId = @t");
         cmd.With("@t", tenantId);
         await using var r = await cmd.ExecuteReaderAsync(ct);
@@ -245,7 +268,7 @@ public sealed class TenantLogoRepository(SqlConnectionFactory connections)
 
     public async Task SaveAsync(Guid tenantId, string contentType, byte[] data, string user, DateTimeOffset at, CancellationToken ct)
     {
-        await using var c = await connections.OpenSystemAsync(ct);
+        await using var c = await connections.OpenForTenantAsync(tenantId, ct);
         await using var cmd = c.Command("""
             MERGE dbo.TenantLogos WITH (HOLDLOCK) AS t
             USING (SELECT @t AS TenantId) AS s ON t.TenantId = s.TenantId
@@ -259,7 +282,7 @@ public sealed class TenantLogoRepository(SqlConnectionFactory connections)
 
     public async Task<bool> DeleteAsync(Guid tenantId, CancellationToken ct)
     {
-        await using var c = await connections.OpenSystemAsync(ct);
+        await using var c = await connections.OpenForTenantAsync(tenantId, ct);
         await using var cmd = c.Command("DELETE dbo.TenantLogos WHERE TenantId = @t");
         return await cmd.With("@t", tenantId).ExecuteNonQueryAsync(ct) == 1;
     }
@@ -269,24 +292,27 @@ public sealed class IntegrationRepository(SqlConnectionFactory connections)
 {
     public async Task<IReadOnlyList<Integration>> ListAsync(Guid tenantId, CancellationToken ct)
     {
-        await using var c = await connections.OpenSystemAsync(ct);
+        await using var c = await connections.OpenForTenantAsync(tenantId, ct);
         await using var cmd = c.Command("SELECT * FROM dbo.Integrations WHERE TenantId = @t ORDER BY CreatedAt");
         cmd.With("@t", tenantId);
         return await ReadAllAsync(cmd, ct);
     }
 
-    public async Task<Integration?> GetAsync(Guid id, CancellationToken ct)
+    public async Task<Integration?> GetAsync(Guid id, Guid? tenantId, CancellationToken ct)
     {
-        await using var c = await connections.OpenSystemAsync(ct);
-        await using var cmd = c.Command("SELECT * FROM dbo.Integrations WHERE Id = @id");
-        cmd.With("@id", id);
+        await using var c = tenantId is { } t ? await connections.OpenForTenantAsync(t, ct) : await connections.OpenSystemAsync(ct);
+        await using var cmd = c.Command("""
+            SELECT i.* FROM dbo.Integrations i JOIN dbo.Tenants t ON t.Id = i.TenantId AND t.IsActive = 1
+            WHERE i.Id = @id AND (@t IS NULL OR i.TenantId = @t)
+            """);
+        cmd.With("@id", id).With("@t", tenantId);
         return (await ReadAllAsync(cmd, ct)).FirstOrDefault();
     }
 
     public async Task InsertAsync(Integration i, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(i);
-        await using var c = await connections.OpenSystemAsync(ct);
+        await using var c = await connections.OpenForTenantAsync(i.TenantId, ct);
         await using var cmd = c.Command("""
             INSERT dbo.Integrations (Id, TenantId, Kind, Name, IsActive, SettingsJson, SecretsProtected, CreatedBy, CreatedAt, UpdatedAt)
             VALUES (@id, @t, @k, @n, @a, @s, @sec, @by, @at, @at)
@@ -298,7 +324,7 @@ public sealed class IntegrationRepository(SqlConnectionFactory connections)
     public async Task UpdateAsync(Integration i, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(i);
-        await using var c = await connections.OpenSystemAsync(ct);
+        await using var c = await connections.OpenForTenantAsync(i.TenantId, ct);
         await using var cmd = c.Command("""
             UPDATE dbo.Integrations SET Name = @n, IsActive = @a, SettingsJson = @s, SecretsProtected = @sec, UpdatedAt = @at
              WHERE Id = @id AND TenantId = @t
@@ -309,35 +335,48 @@ public sealed class IntegrationRepository(SqlConnectionFactory connections)
 
     public async Task<bool> DeleteAsync(Guid tenantId, Guid id, CancellationToken ct)
     {
-        await using var c = await connections.OpenSystemAsync(ct);
+        await using var c = await connections.OpenForTenantAsync(tenantId, ct);
         await using var cmd = c.Command("DELETE dbo.Integrations WHERE Id = @id AND TenantId = @t");
         return await cmd.With("@id", id).With("@t", tenantId).ExecuteNonQueryAsync(ct) == 1;
     }
 
-    public async Task TouchAsync(Guid id, DeliveryDirection direction, DateTimeOffset at, CancellationToken ct)
+    public async Task TouchAsync(Guid tenantId, Guid id, DeliveryDirection direction, DateTimeOffset at, CancellationToken ct)
     {
-        await using var c = await connections.OpenSystemAsync(ct);
+        await using var c = await connections.OpenForTenantAsync(tenantId, ct);
         await using var cmd = c.Command(direction == DeliveryDirection.In
-            ? "UPDATE dbo.Integrations SET LastInboundAt = @at WHERE Id = @id"
-            : "UPDATE dbo.Integrations SET LastOutboundAt = @at WHERE Id = @id");
-        await cmd.With("@id", id).With("@at", at).ExecuteNonQueryAsync(ct);
+            ? "UPDATE dbo.Integrations SET LastInboundAt = @at WHERE Id = @id AND TenantId = @t AND (LastInboundAt IS NULL OR LastInboundAt < @at)"
+            : "UPDATE dbo.Integrations SET LastOutboundAt = @at WHERE Id = @id AND TenantId = @t AND (LastOutboundAt IS NULL OR LastOutboundAt < @at)");
+        await cmd.With("@id", id).With("@t", tenantId).With("@at", at).ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task AdvanceCheckpointAsync(Guid tenantId, Guid id, DateTimeOffset at, CancellationToken ct)
+    {
+        await using var c = await connections.OpenForTenantAsync(tenantId, ct);
+        await using var cmd = c.Command("""
+            UPDATE dbo.Integrations SET SyncCheckpointAt = @at,
+              LastInboundAt = CASE WHEN LastInboundAt IS NULL OR LastInboundAt < @at THEN @at ELSE LastInboundAt END
+            WHERE Id = @id AND TenantId = @t AND (SyncCheckpointAt IS NULL OR SyncCheckpointAt < @at)
+            """);
+        await cmd.With("@id", id).With("@t", tenantId).With("@at", at).ExecuteNonQueryAsync(ct);
     }
 
     public async Task<bool> LinkOrderAsync(Guid integrationId, string externalId, Guid tenantId, Guid invoiceId, DateTimeOffset at, CancellationToken ct)
     {
-        await using var c = await connections.OpenSystemAsync(ct);
+        await using var c = await connections.OpenForTenantAsync(tenantId, ct);
         await using var cmd = c.Command("""
-            IF NOT EXISTS (SELECT 1 FROM dbo.IntegrationOrders WHERE IntegrationId = @i AND ExternalId = @e)
-                INSERT dbo.IntegrationOrders (IntegrationId, ExternalId, TenantId, InvoiceId, CreatedAt) VALUES (@i, @e, @t, @inv, @at)
+            INSERT dbo.IntegrationOrders (IntegrationId, ExternalId, TenantId, InvoiceId, CreatedAt)
+            SELECT @i, @e, @t, @inv, @at
+            WHERE NOT EXISTS (SELECT 1 FROM dbo.IntegrationOrders WITH (UPDLOCK, HOLDLOCK)
+                WHERE IntegrationId = @i AND ExternalId = @e AND TenantId = @t)
             """);
         return await cmd.With("@i", integrationId).With("@e", externalId).With("@t", tenantId).With("@inv", invoiceId).With("@at", at).ExecuteNonQueryAsync(ct) == 1;
     }
 
-    public async Task<bool> OrderExistsAsync(Guid integrationId, string externalId, CancellationToken ct)
+    public async Task<bool> OrderExistsAsync(Guid tenantId, Guid integrationId, string externalId, CancellationToken ct)
     {
-        await using var c = await connections.OpenSystemAsync(ct);
-        await using var cmd = c.Command("SELECT COUNT(*) FROM dbo.IntegrationOrders WHERE IntegrationId = @i AND ExternalId = @e");
-        return (int)(await cmd.With("@i", integrationId).With("@e", externalId).ExecuteScalarAsync(ct) ?? 0) > 0;
+        await using var c = await connections.OpenForTenantAsync(tenantId, ct);
+        await using var cmd = c.Command("SELECT COUNT(*) FROM dbo.IntegrationOrders WHERE TenantId = @t AND IntegrationId = @i AND ExternalId = @e");
+        return (int)(await cmd.With("@t", tenantId).With("@i", integrationId).With("@e", externalId).ExecuteScalarAsync(ct) ?? 0) > 0;
     }
 
     public async Task<IReadOnlyList<Integration>> ActiveByKindsAsync(IReadOnlyCollection<IntegrationKind> kinds, CancellationToken ct)
@@ -354,11 +393,11 @@ public sealed class IntegrationRepository(SqlConnectionFactory connections)
         return await ReadAllAsync(cmd, ct);
     }
 
-    public async Task<IReadOnlyList<(Guid IntegrationId, string ExternalId)>> OrdersForInvoiceAsync(Guid invoiceId, CancellationToken ct)
+    public async Task<IReadOnlyList<(Guid IntegrationId, string ExternalId)>> OrdersForInvoiceAsync(Guid tenantId, Guid invoiceId, CancellationToken ct)
     {
-        await using var c = await connections.OpenSystemAsync(ct);
-        await using var cmd = c.Command("SELECT IntegrationId, ExternalId FROM dbo.IntegrationOrders WHERE InvoiceId = @inv");
-        cmd.With("@inv", invoiceId);
+        await using var c = await connections.OpenForTenantAsync(tenantId, ct);
+        await using var cmd = c.Command("SELECT IntegrationId, ExternalId FROM dbo.IntegrationOrders WHERE TenantId = @t AND InvoiceId = @inv");
+        cmd.With("@t", tenantId).With("@inv", invoiceId);
         var list = new List<(Guid, string)>();
         await using var r = await cmd.ExecuteReaderAsync(ct);
         while (await r.ReadAsync(ct))
@@ -372,16 +411,21 @@ public sealed class IntegrationRepository(SqlConnectionFactory connections)
     public async Task InsertDeliveryAsync(IntegrationDelivery d, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(d);
-        await using var c = await connections.OpenSystemAsync(ct);
+        await using var c = await connections.OpenForTenantAsync(d.TenantId, ct);
         await using var cmd = c.Command("""
             INSERT dbo.IntegrationDeliveries (Id, TenantId, IntegrationId, Direction, EventType, Status, HttpStatus, Attempts, NextAttemptAt,
-                                              RequestBody, ResponseBody, Error, InvoiceId, ExternalId, CreatedAt, CompletedAt)
-            VALUES (@id, @t, @i, @dir, @ev, @st, @http, @att, @next, @req, @res, @err, @inv, @ext, @at, @done)
+                                              RequestBody, ResponseBody, Error, InvoiceId, ExternalId, CreatedAt, CompletedAt, LeaseId, OutboxEventId)
+            SELECT @id, @t, @i, @dir, @ev, @st, @http, @att, @next, @req, @res, @err, @inv, @ext, @at, @done, @leaseId, @outbox
+            WHERE @outbox IS NULL OR NOT EXISTS (
+                SELECT 1 FROM dbo.IntegrationDeliveries WITH (UPDLOCK, HOLDLOCK)
+                WHERE OutboxEventId = @outbox AND IntegrationId = @i AND EventType = @ev
+                  AND (ExternalId = @ext OR (ExternalId IS NULL AND @ext IS NULL)))
             """);
         await cmd.With("@id", d.Id).With("@t", d.TenantId).With("@i", d.IntegrationId).With("@dir", d.Direction.ToString()).With("@ev", d.EventType)
             .With("@st", d.Status.ToString()).With("@http", d.HttpStatus).With("@att", d.Attempts).With("@next", d.NextAttemptAt)
             .WithMax("@req", Cap(d.RequestBody)).WithMax("@res", Cap(d.ResponseBody)).With("@err", d.Error is null ? null : OutboxEventRepository.Truncate(d.Error, 2000))
-            .With("@inv", d.InvoiceId).With("@ext", d.ExternalId).With("@at", d.CreatedAt).With("@done", d.CompletedAt).ExecuteNonQueryAsync(ct);
+            .With("@inv", d.InvoiceId).With("@ext", d.ExternalId).With("@at", d.CreatedAt).With("@done", d.CompletedAt)
+            .With("@leaseId", d.LeaseId).With("@outbox", d.OutboxEventId).ExecuteNonQueryAsync(ct);
     }
 
     public async Task<IReadOnlyList<IntegrationDelivery>> ClaimDueDeliveriesAsync(int take, DateTimeOffset now, TimeSpan lease, CancellationToken ct)
@@ -389,42 +433,54 @@ public sealed class IntegrationRepository(SqlConnectionFactory connections)
         await using var c = await connections.OpenSystemAsync(ct);
         await using var cmd = c.Command("""
             WITH due AS (
-                SELECT TOP (@n) * FROM dbo.IntegrationDeliveries WITH (ROWLOCK, UPDLOCK, READPAST)
-                 WHERE Status = 'Pending' AND Direction = 'Out' AND NextAttemptAt <= @now
-                 ORDER BY NextAttemptAt)
-            UPDATE due SET Attempts = Attempts + 1, NextAttemptAt = @lease
+                SELECT TOP (@n) * FROM dbo.IntegrationDeliveries WITH (UPDLOCK, READPAST, READCOMMITTEDLOCK)
+                 WHERE Status = 'Pending' AND Direction = 'Out' AND LeaseId IS NULL AND NextAttemptAt <= @now
+                 ORDER BY NextAttemptAt, Id)
+            UPDATE due SET Attempts = Attempts + 1, NextAttemptAt = @lease, LeaseId = @leaseId
             OUTPUT inserted.*
             """);
-        cmd.With("@n", take).With("@now", now).With("@lease", now.Add(lease));
+        cmd.With("@n", take).With("@now", now).With("@lease", now.Add(lease)).With("@leaseId", Guid.NewGuid());
         return await ReadDeliveriesAsync(cmd, ct);
     }
 
-    public async Task CompleteDeliveryAsync(Guid id, DeliveryStatus status, int? httpStatus, string? response, string? error, DateTimeOffset? retryAt, DateTimeOffset at, CancellationToken ct)
+    public async Task<bool> CompleteDeliveryAsync(IntegrationDelivery delivery, DeliveryStatus status, int? httpStatus, string? response, string? error, DateTimeOffset? retryAt, DateTimeOffset at, CancellationToken ct)
     {
-        await using var c = await connections.OpenSystemAsync(ct);
+        await using var c = await connections.OpenForTenantAsync(delivery.TenantId, ct);
         await using var cmd = c.Command("""
             UPDATE dbo.IntegrationDeliveries
                SET Status = @st, HttpStatus = @http, ResponseBody = @res, Error = @err,
-                   NextAttemptAt = @retry, CompletedAt = CASE WHEN @st = 'Pending' THEN NULL ELSE @at END
-             WHERE Id = @id
+                   NextAttemptAt = @retry, CompletedAt = CASE WHEN @st = 'Pending' THEN NULL ELSE @at END, LeaseId = NULL
+             WHERE Id = @id AND TenantId = @t AND LeaseId = @leaseId
             """);
-        await cmd.With("@id", id).With("@st", status.ToString()).With("@http", httpStatus).WithMax("@res", Cap(response))
-            .With("@err", error is null ? null : OutboxEventRepository.Truncate(error, 2000)).With("@retry", retryAt).With("@at", at).ExecuteNonQueryAsync(ct);
+        return await cmd.With("@id", delivery.Id).With("@t", delivery.TenantId).With("@leaseId", delivery.LeaseId)
+            .With("@st", status.ToString()).With("@http", httpStatus).WithMax("@res", Cap(response))
+            .With("@err", error is null ? null : OutboxEventRepository.Truncate(error, 2000)).With("@retry", retryAt).With("@at", at).ExecuteNonQueryAsync(ct) == 1;
     }
 
-    public async Task<bool> RetryDeliveryAsync(Guid tenantId, Guid id, DateTimeOffset now, CancellationToken ct)
+    public async Task ExpireClaimsAsync(DateTimeOffset now, CancellationToken ct)
     {
         await using var c = await connections.OpenSystemAsync(ct);
         await using var cmd = c.Command("""
-            UPDATE dbo.IntegrationDeliveries SET Status = 'Pending', NextAttemptAt = @now, Attempts = 0, Error = NULL, CompletedAt = NULL
-             WHERE Id = @id AND TenantId = @t AND Direction = 'Out' AND Status = 'Failed'
+            UPDATE dbo.IntegrationDeliveries SET Status = 'Failed', LeaseId = NULL, CompletedAt = @now, NextAttemptAt = NULL,
+                Error = N'Teslimat sonucu belirsiz. Yeniden göndermeden önce sağlayıcı kaydını doğrulayın.'
+            WHERE Direction = 'Out' AND Status = 'Pending' AND LeaseId IS NOT NULL AND NextAttemptAt <= @now
             """);
-        return await cmd.With("@id", id).With("@t", tenantId).With("@now", now).ExecuteNonQueryAsync(ct) == 1;
+        await cmd.With("@now", now).ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<bool> RetryDeliveryAsync(Guid tenantId, Guid integrationId, Guid id, DateTimeOffset now, CancellationToken ct)
+    {
+        await using var c = await connections.OpenForTenantAsync(tenantId, ct);
+        await using var cmd = c.Command("""
+            UPDATE dbo.IntegrationDeliveries SET Status = 'Pending', NextAttemptAt = @now, Attempts = 0, Error = NULL, CompletedAt = NULL
+             WHERE Id = @id AND TenantId = @t AND IntegrationId = @i AND Direction = 'Out' AND Status = 'Failed'
+            """);
+        return await cmd.With("@id", id).With("@t", tenantId).With("@i", integrationId).With("@now", now).ExecuteNonQueryAsync(ct) == 1;
     }
 
     public async Task<IReadOnlyList<IntegrationDelivery>> DeliveriesAsync(Guid tenantId, Guid integrationId, int take, CancellationToken ct)
     {
-        await using var c = await connections.OpenSystemAsync(ct);
+        await using var c = await connections.OpenForTenantAsync(tenantId, ct);
         await using var cmd = c.Command("""
             SELECT TOP (@n) * FROM dbo.IntegrationDeliveries WHERE TenantId = @t AND IntegrationId = @i ORDER BY CreatedAt DESC
             """);
@@ -458,6 +514,7 @@ public sealed class IntegrationRepository(SqlConnectionFactory connections)
                 UpdatedAt = r.Get<DateTimeOffset>("UpdatedAt"),
                 LastInboundAt = r.GetNullableDateTimeOffset("LastInboundAt"),
                 LastOutboundAt = r.GetNullableDateTimeOffset("LastOutboundAt"),
+                SyncCheckpointAt = r.GetNullableDateTimeOffset("SyncCheckpointAt"),
             });
         }
 
@@ -475,6 +532,7 @@ public sealed class IntegrationRepository(SqlConnectionFactory connections)
                 Id = r.Get<Guid>("Id"),
                 TenantId = r.Get<Guid>("TenantId"),
                 IntegrationId = r.Get<Guid>("IntegrationId"),
+                LeaseId = r.IsDBNull(r.GetOrdinal("LeaseId")) ? null : r.Get<Guid>("LeaseId"),
                 Direction = Enum.Parse<DeliveryDirection>(r.Get<string>("Direction")),
                 EventType = r.Get<string>("EventType"),
                 Status = Enum.Parse<DeliveryStatus>(r.Get<string>("Status")),

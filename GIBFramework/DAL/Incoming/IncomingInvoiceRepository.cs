@@ -62,10 +62,15 @@ public sealed class IncomingInvoiceRepository : IIncomingInvoiceRepository
         ArgumentNullException.ThrowIfNull(invoice);
         ArgumentNullException.ThrowIfNull(scope);
         await using var cmd = scope.Connection.Command(
-            "UPDATE dbo.IncomingInvoices SET Status = @s, DecidedBy = @by, DecidedAt = @at WHERE TenantId = @t AND Id = @id",
+            "UPDATE dbo.IncomingInvoices SET Status = @s, DecidedBy = @by, DecidedAt = @at WHERE TenantId = @t AND Id = @id AND Status = @expected",
             scope.Transaction);
-        await cmd.With("@s", invoice.Status.ToString()).With("@by", invoice.DecidedBy).With("@at", invoice.DecidedAt)
-            .With("@t", invoice.TenantId).With("@id", invoice.Id).ExecuteNonQueryAsync(cancellationToken);
+        var changed = await cmd.With("@s", invoice.Status.ToString()).With("@by", invoice.DecidedBy).With("@at", invoice.DecidedAt)
+            .With("@t", invoice.TenantId).With("@id", invoice.Id).With("@expected", IncomingStatus.Validated.ToString())
+            .ExecuteNonQueryAsync(cancellationToken);
+        if (changed != 1)
+        {
+            throw new ConflictException("INCOMING_ALREADY_DECIDED", "Gelen fatura hakkında daha önce karar verildi.");
+        }
     }
 
     private static async Task<List<IncomingInvoice>> ReadAsync(SqlCommand cmd, CancellationToken cancellationToken)

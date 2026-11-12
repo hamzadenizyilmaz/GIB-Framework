@@ -53,6 +53,7 @@ public sealed class Integration
     public DateTimeOffset? LastInboundAt { get; set; }
 
     public DateTimeOffset? LastOutboundAt { get; set; }
+    public DateTimeOffset? SyncCheckpointAt { get; set; }
 
     public string? Setting(string key) => Settings.TryGetValue(key, out var v) && !string.IsNullOrWhiteSpace(v) ? v.Trim() : null;
 
@@ -68,6 +69,8 @@ public sealed class IntegrationSettingsDocument
 
 public sealed class IntegrationDelivery
 {
+    internal Guid? LeaseId { get; set; }
+    internal long? OutboxEventId { get; set; }
     public Guid Id { get; set; }
 
     public Guid TenantId { get; set; }

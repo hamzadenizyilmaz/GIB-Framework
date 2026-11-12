@@ -1,6 +1,4 @@
 {
-  // Kanonik hukuki/teknik kaynak kataloğu (resmî GİB / Resmî Gazete adresleri; 07.10.2026'da kontrol edildi).
-  // sha256: indirilen resmî dosyanın hash'i (Legal Source Watcher doldurur; değişiklikte "LEGAL SOURCE CHANGED" olayı açılır).
   "sources": [
     {
       "code": "VUK",

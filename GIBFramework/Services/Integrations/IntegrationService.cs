@@ -1,11 +1,10 @@
 using System.ComponentModel.DataAnnotations;
-using System.Net;
 using System.Net.Http.Headers;
-using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.DataProtection;
+using GIBFramework.DAL;
 using GIBFramework.DAL.Messaging;
 using GIBFramework.DAL.Tenants;
 using GIBFramework.Infrastructure.Tenancy;
@@ -44,6 +43,7 @@ public sealed record InboundResult(int StatusCode, object Body);
 
 public sealed partial class IntegrationService(
     IntegrationRepository repository,
+    SqlConnectionFactory connections,
     InvoiceService invoices,
     InvoiceDocumentService documents,
     ITenantRepository tenants,
@@ -52,6 +52,7 @@ public sealed partial class IntegrationService(
     IDataProtectionProvider dataProtection,
     IHttpClientFactory httpFactory,
     IHostEnvironment environment,
+    Infrastructure.OutboundNetwork network,
     IEnumerable<IMarketplaceClient> marketplaces,
     IAuditTrail audit,
     AppOptions app,
@@ -155,7 +156,7 @@ public sealed partial class IntegrationService(
     public async Task<bool> RetryAsync(Guid id, Guid deliveryId, CancellationToken ct)
     {
         var integration = await LoadOwnedAsync(id, ct);
-        return await repository.RetryDeliveryAsync(integration.TenantId, deliveryId, clock.UtcNow, ct);
+        return await repository.RetryDeliveryAsync(integration.TenantId, integration.Id, deliveryId, clock.UtcNow, ct);
     }
 
     public async Task<IntegrationDelivery> TestAsync(Guid id, CancellationToken ct)
@@ -177,10 +178,11 @@ public sealed partial class IntegrationService(
             Status = DeliveryStatus.Pending,
             RequestBody = JsonDefaults.Serialize(new { id = Guid.NewGuid(), @event = "ping", createdAt = now, tenantId = integration.TenantId, data = new { message = "GIB Framework bağlantı denemesi" } }),
             CreatedAt = now,
-            NextAttemptAt = now,
+            NextAttemptAt = now.AddMinutes(5),
+            LeaseId = Guid.NewGuid(),
+            Attempts = 1,
         };
         await repository.InsertDeliveryAsync(delivery, ct);
-        delivery.Attempts = 1;
         await DeliverAsync(delivery, ct);
         return (await repository.DeliveriesAsync(integration.TenantId, integration.Id, 20, ct)).First(d => d.Id == delivery.Id);
     }
@@ -189,23 +191,21 @@ public sealed partial class IntegrationService(
     {
         ArgumentNullException.ThrowIfNull(body);
         ArgumentNullException.ThrowIfNull(headers);
-        var integration = await repository.GetAsync(id, ct);
+        var integration = await repository.GetAsync(id, null, ct);
         if (integration is null || !integration.IsActive)
         {
             return new InboundResult(StatusCodes.Status404NotFound, new { error = "Entegrasyon bulunamadı veya kapalı." });
         }
 
         var now = clock.UtcNow;
-        var text = Encoding.UTF8.GetString(body);
         var log = new IntegrationDelivery
         {
             Id = Guid.CreateVersion7(now),
             TenantId = integration.TenantId,
             IntegrationId = integration.Id,
             Direction = DeliveryDirection.In,
-            EventType = headers["X-WC-Webhook-Topic"].FirstOrDefault() ?? headers["X-Shopify-Topic"].FirstOrDefault() ?? "order",
+            EventType = "webhook",
             Attempts = 1,
-            RequestBody = text,
             CreatedAt = now,
             CompletedAt = now,
         };
@@ -217,12 +217,19 @@ public sealed partial class IntegrationService(
             log.Error = error;
             log.ResponseBody = JsonDefaults.Serialize(response);
             await repository.InsertDeliveryAsync(log, CancellationToken.None);
-            await repository.TouchAsync(integration.Id, DeliveryDirection.In, now, CancellationToken.None);
+            if (status == DeliveryStatus.Succeeded)
+            {
+                await repository.TouchAsync(integration.TenantId, integration.Id, DeliveryDirection.In, now, CancellationToken.None);
+            }
             return new InboundResult(code, response);
         }
 
-        if (integration.Kind == IntegrationKind.WooCommerce && text.StartsWith("webhook_id=", StringComparison.Ordinal))
+        if (integration.Kind == IntegrationKind.WooCommerce && body.Length <= 64
+            && Encoding.UTF8.GetString(body) is var ping && ping.StartsWith("webhook_id=", StringComparison.Ordinal)
+            && long.TryParse(ping.AsSpan("webhook_id=".Length), System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out var webhookId) && webhookId > 0)
         {
+            log.EventType = "ping";
             return await Finish(DeliveryStatus.Ignored, 200, new { ok = true, message = "WooCommerce ping alındı." });
         }
 
@@ -232,6 +239,7 @@ public sealed partial class IntegrationService(
             return await Finish(DeliveryStatus.Failed, 401, new { error = "İmza doğrulanamadı." }, "İmza doğrulanamadı.");
         }
 
+        log.EventType = OutboxEventRepository.Truncate(headers["X-WC-Webhook-Topic"].FirstOrDefault() ?? headers["X-Shopify-Topic"].FirstOrDefault() ?? "order", 100);
         MapResult mapped;
         try
         {
@@ -286,8 +294,6 @@ public sealed partial class IntegrationService(
         return count;
     }
 
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, byte> Running = new();
-
     private async Task<object> SyncCoreAsync(Integration integration, CancellationToken ct)
     {
         if (!IsMarketplace(integration.Kind))
@@ -295,19 +301,10 @@ public sealed partial class IntegrationService(
             throw new ValidationFailedException("INTEGRATION_NOT_MARKETPLACE", "Bu entegrasyon sipariş çekmez; siparişler gelen adrese gönderilir.", []);
         }
 
-        if (!Running.TryAdd(integration.Id, 0))
-        {
-            return new { created = 0, skipped = 0, failed = 0, error = "Bu entegrasyon için eşitleme zaten sürüyor; birkaç saniye sonra tekrar deneyin." };
-        }
-
-        try
-        {
-            return await SyncLockedAsync(integration, ct);
-        }
-        finally
-        {
-            Running.TryRemove(integration.Id, out _);
-        }
+        await using var syncLock = await connections.AcquireTenantLockAsync(integration.TenantId, $"integration-sync:{integration.Id:N}", ct);
+        var current = await repository.GetAsync(integration.Id, integration.TenantId, ct);
+        return current is { IsActive: true } ? await SyncLockedAsync(current, ct)
+            : throw new NotFoundException("Etkin entegrasyon bulunamadı.");
     }
 
     private async Task<object> SyncLockedAsync(Integration integration, CancellationToken ct)
@@ -317,13 +314,13 @@ public sealed partial class IntegrationService(
         var now = clock.UtcNow;
         var maxDays = integration.Kind == IntegrationKind.Trendyol ? 13 : 14;
         var initialDays = int.TryParse(integration.Setting("initialDays"), out var d) ? Math.Clamp(d, 1, maxDays) : 3;
-        var from = (integration.LastInboundAt?.AddHours(-3) ?? now.AddDays(-initialDays));
+        var from = integration.SyncCheckpointAt?.AddHours(-3) ?? now.AddDays(-initialDays);
         if (from < now.AddDays(-maxDays))
         {
             from = now.AddDays(-maxDays);
         }
 
-        var to = now.AddHours(3);
+        var to = now;
         int created = 0, skipped = 0, failed = 0;
         string? error = null;
         try
@@ -332,13 +329,16 @@ public sealed partial class IntegrationService(
             foreach (var mo in orders)
             {
                 var externalId = Truncate(mo.Order.ExternalId, 100);
-                if (await repository.OrderExistsAsync(integration.Id, externalId, ct))
+                if (await repository.OrderExistsAsync(integration.TenantId, integration.Id, externalId, ct))
                 {
                     skipped++;
                     continue;
                 }
 
-                var result = await ImportAsync(integration, mo.Order, ct);
+                const string microExport = "Mikro ihracat profili incelemesi gerekiyor; otomatik fatura oluşturulmadı.";
+                var result = mo.IsMicroExport
+                    ? new ImportResult(DeliveryStatus.Failed, 422, new { code = "MICRO_EXPORT_REVIEW", error = microExport }, microExport, null)
+                    : await ImportAsync(integration, mo.Order, ct);
                 var at = clock.UtcNow;
                 await repository.InsertDeliveryAsync(new IntegrationDelivery
                 {
@@ -367,6 +367,7 @@ public sealed partial class IntegrationService(
                     failed++;
                 }
             }
+            await repository.AdvanceCheckpointAsync(integration.TenantId, integration.Id, to, ct);
         }
         catch (MarketplaceException ex)
         {
@@ -386,7 +387,6 @@ public sealed partial class IntegrationService(
             }, ct);
         }
 
-        await repository.TouchAsync(integration.Id, DeliveryDirection.In, now, ct);
         return new { created, skipped, failed, error, from, to };
     }
 
@@ -450,7 +450,7 @@ public sealed partial class IntegrationService(
             return;
         }
 
-        var links = await repository.OrdersForInvoiceAsync(evt.Invoice.Id, ct);
+        var links = await repository.OrdersForInvoiceAsync(evt.Invoice.TenantId, evt.Invoice.Id, ct);
         var now = clock.UtcNow;
         foreach (var integration in list)
         {
@@ -464,10 +464,10 @@ public sealed partial class IntegrationService(
                     createdAt = now,
                     tenantId = integration.TenantId,
                     data = Payload(evt, orderId),
-                }), evt.Invoice.Id, orderId, now, ct);
+                }), evt.Invoice.Id, orderId, now, evt.Id, ct);
             }
 
-            if (IsMarketplace(integration.Kind) && orderId is not null && evt.EventType == InvoiceEvents.Issued && evt.Invoice.DocumentNumber is not null
+            if (IsMarketplace(integration.Kind) && orderId is not null && evt.EventType == InvoiceEvents.Issued && evt.PublicLink.Length > 0 && evt.Invoice.DocumentNumber is not null
                 && (integration.Flag("sendInvoiceLink") || integration.Setting("sendInvoiceLink") is null))
             {
                 var i = evt.Invoice;
@@ -476,44 +476,47 @@ public sealed partial class IntegrationService(
                     i.OrderNumber,
                     documents.PdfLink(i.TenantId, i.Id, InvoiceDocumentService.ArchiveLinkLifetime),
                     i.DocumentNumber,
-                    i.SignedAt ?? i.TransmittedAt ?? now)), i.Id, orderId, now, ct);
+                    i.SignedAt ?? i.TransmittedAt ?? now)), i.Id, orderId, now, evt.Id, ct);
             }
 
-            if (integration.Kind == IntegrationKind.WooCommerce && orderId is not null && evt.EventType == InvoiceEvents.Issued
+            if (integration.Kind == IntegrationKind.WooCommerce && orderId is not null && evt.EventType == InvoiceEvents.Issued && evt.PublicLink.Length > 0
                 && (integration.Flag("addOrderNote") || integration.Setting("addOrderNote") is null))
             {
                 var i = evt.Invoice;
                 var note = $"{InvoiceDocumentService.DocumentTypeLabel(i)} düzenlendi. Belge no: {i.DocumentNumber}, tutar: {InvoiceDocumentService.Money(i.Totals.PayableAmount, i.Currency)}. Faturayı görüntüleyin: {evt.PublicLink}";
-                await QueueAsync(integration, "woocommerce.order_note", JsonDefaults.Serialize(new { orderId, note, customer_note = true }), i.Id, orderId, now, ct);
+                await QueueAsync(integration, "woocommerce.order_note", JsonDefaults.Serialize(new { orderId, note, customer_note = true }), i.Id, orderId, now, evt.Id, ct);
             }
         }
     }
 
     public async Task<int> SendDueAsync(CancellationToken ct)
     {
-        var batch = await repository.ClaimDueDeliveriesAsync(20, clock.UtcNow, TimeSpan.FromMinutes(5), ct);
-        foreach (var d in batch)
+        await repository.ExpireClaimsAsync(clock.UtcNow, ct);
+        var count = 0;
+        while (count < 20 && (await repository.ClaimDueDeliveriesAsync(1, clock.UtcNow, TimeSpan.FromMinutes(5), ct)).FirstOrDefault() is { } d)
         {
             await DeliverAsync(d, ct);
+            count++;
         }
 
-        return batch.Count;
+        return count;
     }
 
     public static bool IsAnonymousConsumer(string taxId) => taxId == AnonymousConsumer;
 
     private async Task DeliverAsync(IntegrationDelivery delivery, CancellationToken ct)
     {
-        var integration = await repository.GetAsync(delivery.IntegrationId, ct);
+        var integration = await repository.GetAsync(delivery.IntegrationId, delivery.TenantId, ct);
         var now = clock.UtcNow;
         if (integration is null || !integration.IsActive)
         {
-            await repository.CompleteDeliveryAsync(delivery.Id, DeliveryStatus.Ignored, null, null, "Entegrasyon kapalı.", null, now, ct);
+            await CompleteAsync(delivery, DeliveryStatus.Ignored, null, null, "Entegrasyon kapalı.", null);
             return;
         }
 
         int? status = null;
         string? response = null;
+        DateTimeOffset? retryAfter = null;
         try
         {
             if (delivery.EventType.EndsWith(".invoice_link", StringComparison.Ordinal) && IsMarketplace(integration.Kind))
@@ -521,38 +524,58 @@ public sealed partial class IntegrationService(
                 var link = JsonDefaults.Deserialize<MarketplaceInvoiceLink>(delivery.RequestBody ?? "{}");
                 response = await marketplaces.First(c => c.Kind == integration.Kind).SendInvoiceLinkAsync(integration, Secrets(integration), link, ct);
                 status = 200;
-                await repository.CompleteDeliveryAsync(delivery.Id, DeliveryStatus.Succeeded, status, response, null, null, now, ct);
-                await repository.TouchAsync(integration.Id, DeliveryDirection.Out, now, ct);
-                return;
             }
-
-            using var request = delivery.EventType == "woocommerce.order_note"
-                ? await WooNoteRequestAsync(integration, delivery)
-                : await WebhookRequestAsync(integration, delivery);
-            using var http = await httpFactory.CreateClient(HttpClientName).SendAsync(request, ct);
-            status = (int)http.StatusCode;
-            response = await http.Content.ReadAsStringAsync(ct);
-            if (!http.IsSuccessStatusCode)
+            else
             {
-                throw new HttpRequestException($"Karşı sistem HTTP {status} döndürdü.");
+                using var request = delivery.EventType == "woocommerce.order_note"
+                    ? WooNoteRequest(integration, delivery)
+                    : WebhookRequest(integration, delivery);
+                using var http = await httpFactory.CreateClient(HttpClientName).SendAsync(request, ct);
+                status = (int)http.StatusCode;
+                response = await http.Content.ReadAsStringAsync(ct);
+                if (!http.IsSuccessStatusCode)
+                {
+                    var header = http.Headers.RetryAfter;
+                    retryAfter = header?.Date ?? (header?.Delta is { } delay ? clock.UtcNow.Add(delay) : null);
+                    throw new HttpRequestException($"Karşı sistem HTTP {status} döndürdü.");
+                }
             }
-
-            await repository.CompleteDeliveryAsync(delivery.Id, DeliveryStatus.Succeeded, status, response, null, null, now, ct);
-            await repository.TouchAsync(integration.Id, DeliveryDirection.Out, now, ct);
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException or UriFormatException or MarketplaceException)
         {
-            var permanent = ex is InvalidOperationException or UriFormatException || ex is MarketplaceException { Transient: false } || status is 400 or 401 or 403 or 404 or 410 or 422;
+            var uncertain = status is null && ex is HttpRequestException or TaskCanceledException;
+            var permanent = uncertain || ex is InvalidOperationException or UriFormatException || ex is MarketplaceException { Transient: false }
+                || status is 400 or 401 or 403 or 404 or 410 or 422;
             DateTimeOffset? retry = !permanent && delivery.Attempts < Backoff.Length ? now.Add(Backoff[Math.Clamp(delivery.Attempts - 1, 0, Backoff.Length - 1)]) : null;
-            Log.DeliveryFailed(logger, delivery.Id, ex.Message);
-            await repository.CompleteDeliveryAsync(delivery.Id, retry is null ? DeliveryStatus.Failed : DeliveryStatus.Pending, status, response,
-                ex is TaskCanceledException ? "Zaman aşımı." : ex.Message, retry, now, CancellationToken.None);
+            retryAfter ??= ex is MarketplaceException { RetryAfter: { } delay } ? now.Add(delay) : null;
+            if (retry is { } next && retryAfter is { } after && after > next) retry = after;
+            var error = uncertain ? "Teslimat sonucu belirsiz. Yeniden göndermeden önce sağlayıcı kaydını doğrulayın." : ex.Message;
+            Log.DeliveryFailed(logger, delivery.Id, error);
+            await CompleteAsync(delivery, retry is null ? DeliveryStatus.Failed : DeliveryStatus.Pending, status, response, error, retry);
+            return;
+        }
+
+        if (await CompleteAsync(delivery, DeliveryStatus.Succeeded, status, response, null, null))
+        {
+            await repository.TouchAsync(integration.TenantId, integration.Id, DeliveryDirection.Out, clock.UtcNow, ct);
         }
     }
 
-    private async Task<HttpRequestMessage> WebhookRequestAsync(Integration integration, IntegrationDelivery delivery)
+    private async Task<bool> CompleteAsync(IntegrationDelivery delivery, DeliveryStatus status, int? httpStatus, string? response, string? error, DateTimeOffset? retry)
     {
-        var url = await SafeUriAsync(integration.Setting(IntegrationCatalog.WebhookUrl) ?? throw new InvalidOperationException("Bildirim adresi tanımlı değil."));
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var completed = await repository.CompleteDeliveryAsync(delivery, status, httpStatus, response, error, retry, clock.UtcNow, deadline.Token);
+        if (!completed)
+        {
+            logger.LogWarning("Teslimat {DeliveryId} için işlem kirası sona erdi.", delivery.Id);
+        }
+
+        return completed;
+    }
+
+    private HttpRequestMessage WebhookRequest(Integration integration, IntegrationDelivery delivery)
+    {
+        var url = SafeUri(integration.Setting(IntegrationCatalog.WebhookUrl) ?? throw new InvalidOperationException("Bildirim adresi tanımlı değil."));
         var body = delivery.RequestBody ?? "{}";
         var timestamp = clock.UtcNow.ToUnixTimeSeconds().ToString(System.Globalization.CultureInfo.InvariantCulture);
         var secret = Secrets(integration).GetValueOrDefault(IntegrationCatalog.SigningSecret) ?? string.Empty;
@@ -564,7 +587,7 @@ public sealed partial class IntegrationService(
         return request;
     }
 
-    private async Task<HttpRequestMessage> WooNoteRequestAsync(Integration integration, IntegrationDelivery delivery)
+    private HttpRequestMessage WooNoteRequest(Integration integration, IntegrationDelivery delivery)
     {
         var secrets = Secrets(integration);
         var key = secrets.GetValueOrDefault(IntegrationCatalog.ConsumerKey);
@@ -577,7 +600,7 @@ public sealed partial class IntegrationService(
         using var doc = JsonDocument.Parse(delivery.RequestBody ?? "{}");
         var orderId = doc.RootElement.GetProperty("orderId").GetString();
         var store = (integration.Setting("storeUrl") ?? throw new InvalidOperationException("Mağaza adresi tanımlı değil.")).TrimEnd('/');
-        var url = await SafeUriAsync($"{store}/wp-json/wc/v3/orders/{Uri.EscapeDataString(orderId ?? string.Empty)}/notes");
+        var url = SafeUri($"{store}/wp-json/wc/v3/orders/{Uri.EscapeDataString(orderId ?? string.Empty)}/notes");
         var request = new HttpRequestMessage(HttpMethod.Post, url)
         {
             Content = new StringContent(JsonDefaults.Serialize(new { note = doc.RootElement.GetProperty("note").GetString(), customer_note = true }), Encoding.UTF8, "application/json"),
@@ -586,57 +609,32 @@ public sealed partial class IntegrationService(
         return request;
     }
 
-    private async Task<Uri> SafeUriAsync(string value)
+    private Uri SafeUri(string value)
     {
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp))
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || !string.IsNullOrEmpty(uri.UserInfo)
+            || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp))
         {
             throw new InvalidOperationException("Adres geçerli bir http(s) URL'si olmalıdır.");
         }
 
-        if (environment.IsDevelopment())
+        if (!environment.IsDevelopment() && (uri.Scheme != Uri.UriSchemeHttps || !uri.IsDefaultPort))
         {
-            return uri;
+            throw new InvalidOperationException("Bildirim adresi standart HTTPS bağlantı noktasını kullanmalıdır.");
         }
 
-        if (uri.Scheme != Uri.UriSchemeHttps)
+        if (!network.AllowsWebhook(uri.IdnHost))
         {
-            throw new InvalidOperationException("Güvenlik nedeniyle yalnızca HTTPS adreslerine gönderim yapılır.");
-        }
-
-        var addresses = IPAddress.TryParse(uri.Host, out var ip) ? [ip] : await Dns.GetHostAddressesAsync(uri.Host);
-        if (addresses.Length == 0 || addresses.Any(IsPrivate))
-        {
-            throw new InvalidOperationException("Adres iç ağa / yerel makineye çözülüyor; gönderim engellendi.");
+            throw new InvalidOperationException("Bildirim sunucusu izin verilen hedefler arasında değil.");
         }
 
         return uri;
     }
 
-    private static bool IsPrivate(IPAddress ip)
-    {
-        if (IPAddress.IsLoopback(ip) || ip.IsIPv6LinkLocal || ip.IsIPv6SiteLocal || ip.IsIPv6UniqueLocal)
-        {
-            return true;
-        }
-
-        if (ip.IsIPv4MappedToIPv6)
-        {
-            ip = ip.MapToIPv4();
-        }
-
-        if (ip.AddressFamily != AddressFamily.InterNetwork)
-        {
-            return false;
-        }
-
-        var b = ip.GetAddressBytes();
-        return b[0] is 10 or 127 or 0 || (b[0] == 172 && b[1] is >= 16 and <= 31) || (b[0] == 192 && b[1] == 168) || (b[0] == 169 && b[1] == 254) || (b[0] == 100 && b[1] is >= 64 and <= 127);
-    }
-
-    private async Task QueueAsync(Integration integration, string eventType, string body, Guid invoiceId, string? externalId, DateTimeOffset now, CancellationToken ct) =>
+    private async Task QueueAsync(Integration integration, string eventType, string body, Guid invoiceId, string? externalId, DateTimeOffset now, long eventId, CancellationToken ct) =>
         await repository.InsertDeliveryAsync(new IntegrationDelivery
         {
             Id = Guid.CreateVersion7(now),
+            OutboxEventId = eventId,
             TenantId = integration.TenantId,
             IntegrationId = integration.Id,
             Direction = DeliveryDirection.Out,
@@ -862,7 +860,7 @@ public sealed partial class IntegrationService(
 
     private async Task<Integration> LoadOwnedAsync(Guid id, CancellationToken ct)
     {
-        var integration = await repository.GetAsync(id, ct);
+        var integration = await repository.GetAsync(id, context.RequireTenant(), ct);
         return integration is not null && integration.TenantId == context.RequireTenant() ? integration : throw new NotFoundException("Entegrasyon bulunamadı.");
     }
 
@@ -884,4 +882,4 @@ public sealed partial class IntegrationService(
     }
 }
 
-public sealed record OutboxEventContext(string EventType, Invoice Invoice, string? Note, string PublicLink, string PanelLink);
+public sealed record OutboxEventContext(long Id, string EventType, Invoice Invoice, string? Note, string PublicLink, string PanelLink);

@@ -1,8 +1,4 @@
 {
-  // Belge türü yönlendirme kuralları. Öncelik (priority) büyük olan önce değerlendirilir; karar veren ilk kural kazanır.
-  // Bir kural kaldırılmaz: yeni versiyon eklenir, eskisi effectiveTo ile kapanır.
-  // 07.10.2026: parametreler 509 dipnotlu güncel metin (IV.2.4.3, s.21, dipnot 24-25) ve 589 RG metniyle karşılaştırıldı.
-  // Durum yine PendingExpertReview: SMMM/YMM onayı veri olarak işlenmeden üretimde kullanılmaz.
   "rules": [
     {
       "code": "EF-ROUTING",

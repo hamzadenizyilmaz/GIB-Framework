@@ -17,6 +17,10 @@ public sealed class FileSystemEvidenceVault(string rootPath, IClock clock) : IEv
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(items);
+        if (!IsSafeName(stage))
+        {
+            throw new ArgumentException("Kanıt aşamasının adı geçersiz.", nameof(stage));
+        }
         if (items.Select(i => i.Name).Distinct(StringComparer.OrdinalIgnoreCase).Count() != items.Count || items.Any(i => !IsSafeName(i.Name)))
         {
             throw new ArgumentException("Kanıt dosya adları benzersiz ve güvenli olmalıdır.", nameof(items));
@@ -25,62 +29,87 @@ public sealed class FileSystemEvidenceVault(string rootPath, IClock clock) : IEv
         var documentDir = DocumentDirectory(tenantId, documentId);
         Directory.CreateDirectory(documentDir);
 
+        await using var documentLock = await LockDocumentAsync(documentDir, cancellationToken);
         var existing = await ListAsync(tenantId, documentId, cancellationToken);
-        var sequence = existing.Count == 0 ? 1 : existing[^1].Sequence + 1;
-        string stageDir;
+        var previous = existing.LastOrDefault();
+        var sequence = (previous?.Sequence ?? 0) + 1;
+        while (Directory.EnumerateDirectories(documentDir, $"{sequence:D4}-*").Any())
+        {
+            sequence++;
+        }
+
+        var stageDir = Path.Combine(documentDir, $"{sequence:D4}-{stage}");
+        var pending = Path.Combine(documentDir, ".pending");
+        DeletePending(pending);
+        Directory.CreateDirectory(pending);
+        var artifacts = new List<EvidenceArtifact>();
+        try
+        {
+            foreach (var item in items)
+            {
+                await File.WriteAllBytesAsync(Path.Combine(pending, item.Name), item.Content, cancellationToken);
+                artifacts.Add(new EvidenceArtifact(item.Name, item.ContentType, item.Content.LongLength, Hashing.Sha256Hex(item.Content)));
+            }
+
+            var manifest = new EvidenceManifest
+            {
+                TenantId = tenantId,
+                DocumentId = documentId,
+                Sequence = sequence,
+                Stage = stage,
+                CreatedAt = clock.UtcNow,
+                RetentionClass = retentionClass,
+                RetainUntil = RetentionPolicy.RetainUntil(retentionClass, fiscalYear),
+                Artifacts = artifacts,
+                PreviousManifestHash = previous?.ManifestHash,
+            };
+            manifest = manifest with { ManifestHash = manifest.ComputeHash() };
+            await File.WriteAllBytesAsync(Path.Combine(pending, ManifestFile), JsonDefaults.SerializeToUtf8(manifest, indented: true), cancellationToken);
+            foreach (var file in Directory.EnumerateFiles(pending))
+            {
+                File.SetAttributes(file, FileAttributes.ReadOnly);
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            Directory.Move(pending, stageDir);
+            return manifest;
+        }
+        finally
+        {
+            DeletePending(pending);
+        }
+    }
+
+    private static async Task<FileStream> LockDocumentAsync(string directory, CancellationToken ct)
+    {
+        var path = Path.Combine(directory, ".write.lock");
+        var wait = System.Diagnostics.Stopwatch.StartNew();
         while (true)
         {
+            ct.ThrowIfCancellationRequested();
             try
             {
-                using (new FileStream(Path.Combine(documentDir, $"{sequence:D4}.lock"), FileMode.CreateNew, FileAccess.Write))
-                {
-                }
-
-                stageDir = Path.Combine(documentDir, $"{sequence:D4}-{stage}");
-                Directory.CreateDirectory(stageDir);
-                break;
+                return new FileStream(path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.None);
             }
-            catch (IOException) when (File.Exists(Path.Combine(documentDir, $"{sequence:D4}.lock")))
+            catch (IOException ex) when ((ex.HResult & 0xffff) is 11 or 32 or 33 && wait.Elapsed < TimeSpan.FromSeconds(15))
             {
-                sequence++;
+                await Task.Delay(50, ct);
             }
         }
+    }
 
-        var artifacts = new List<EvidenceArtifact>();
-        foreach (var item in items)
+    private static void DeletePending(string directory)
+    {
+        if (!Directory.Exists(directory))
         {
-            var path = Path.Combine(stageDir, item.Name);
-            await using (var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-            {
-                await stream.WriteAsync(item.Content, cancellationToken);
-            }
-
-            File.SetAttributes(path, FileAttributes.ReadOnly);
-            artifacts.Add(new EvidenceArtifact(item.Name, item.ContentType, item.Content.LongLength, Hashing.Sha256Hex(item.Content)));
+            return;
         }
 
-        var previous = existing
-            .Where(m => m.Sequence < sequence)
-            .OrderBy(m => m.Sequence)
-            .LastOrDefault();
-        var manifest = new EvidenceManifest
+        foreach (var file in Directory.EnumerateFiles(directory))
         {
-            TenantId = tenantId,
-            DocumentId = documentId,
-            Sequence = sequence,
-            Stage = stage,
-            CreatedAt = clock.UtcNow,
-            RetentionClass = retentionClass,
-            RetainUntil = RetentionPolicy.RetainUntil(retentionClass, fiscalYear),
-            Artifacts = artifacts,
-            PreviousManifestHash = previous?.ManifestHash,
-        };
-        manifest = manifest with { ManifestHash = manifest.ComputeHash() };
-
-        var manifestPath = Path.Combine(stageDir, ManifestFile);
-        await File.WriteAllBytesAsync(manifestPath, JsonDefaults.SerializeToUtf8(manifest, indented: true), cancellationToken);
-        File.SetAttributes(manifestPath, FileAttributes.ReadOnly);
-        return manifest;
+            File.SetAttributes(file, FileAttributes.Normal);
+            File.Delete(file);
+        }
+        Directory.Delete(directory);
     }
 
     public async Task<IReadOnlyList<EvidenceManifest>> ListAsync(Guid tenantId, Guid documentId, CancellationToken cancellationToken)
@@ -92,7 +121,7 @@ public sealed class FileSystemEvidenceVault(string rootPath, IClock clock) : IEv
         }
 
         var list = new List<EvidenceManifest>();
-        foreach (var stageDir in Directory.GetDirectories(dir).OrderBy(d => d, StringComparer.Ordinal))
+        foreach (var stageDir in Directory.EnumerateDirectories(dir, "*-*"))
         {
             var path = Path.Combine(stageDir, ManifestFile);
             if (File.Exists(path))
@@ -111,7 +140,14 @@ public sealed class FileSystemEvidenceVault(string rootPath, IClock clock) : IEv
             return null;
         }
 
-        var stageDir = Directory.GetDirectories(DocumentDirectory(tenantId, documentId), $"{sequence:D4}-*").FirstOrDefault();
+        var documentDir = DocumentDirectory(tenantId, documentId);
+        if (!Directory.Exists(documentDir))
+        {
+            return null;
+        }
+
+        var stageDir = Directory.EnumerateDirectories(documentDir, $"{sequence:D4}-*")
+            .FirstOrDefault(dir => File.Exists(Path.Combine(dir, ManifestFile)));
         var path = stageDir is null ? null : Path.Combine(stageDir, name);
         return path is not null && File.Exists(path) ? await File.ReadAllBytesAsync(path, cancellationToken) : null;
     }

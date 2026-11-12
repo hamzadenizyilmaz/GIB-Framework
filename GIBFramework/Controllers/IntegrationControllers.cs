@@ -34,26 +34,29 @@ public sealed class InvoiceDeliveryController(
     [HttpGet("{id:guid}/share-link")]
     public async Task<IActionResult> ShareLink(Guid id, CancellationToken ct)
     {
-        var tenantId = context.RequireTenant();
-        _ = await documents.LoadAsync(tenantId, id, ct) ?? throw new NotFoundException("Fatura bulunamadı.");
-        return Ok(new { url = documents.PublicLink(tenantId, id), expiresInDays = 400 });
-    }
-
-    [HttpPost("{id:guid}/send")]
-    public async Task<IActionResult> Send(Guid id, [FromBody] SendInvoiceRequest request, CancellationToken ct)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        if (!(await authorization.AuthorizeAsync(User, Policies.InvoiceCreate)).Succeeded && !(await authorization.AuthorizeAsync(User, Policies.InvoiceTransmit)).Succeeded)
+        if (!await CanShareAsync())
         {
             return Forbid();
         }
 
         var tenantId = context.RequireTenant();
         var invoice = await documents.LoadAsync(tenantId, id, ct) ?? throw new NotFoundException("Fatura bulunamadı.");
-        if (invoice.DocumentNumber is null)
+        await RequireShareableAsync(invoice, ct);
+        return Ok(new { url = documents.PublicLink(tenantId, id), expiresInDays = InvoiceDocumentService.LinkLifetime.TotalDays });
+    }
+
+    [HttpPost("{id:guid}/send")]
+    public async Task<IActionResult> Send(Guid id, [FromBody] SendInvoiceRequest request, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (!await CanShareAsync())
         {
-            throw new DomainException("INVOICE_NOT_ISSUED", "Fatura henüz numara almadı; düzenlendikten sonra gönderilebilir.");
+            return Forbid();
         }
+
+        var tenantId = context.RequireTenant();
+        var invoice = await documents.LoadAsync(tenantId, id, ct) ?? throw new NotFoundException("Fatura bulunamadı.");
+        await RequireShareableAsync(invoice, ct);
 
         if (request.Channels is not { Count: > 0 })
         {
@@ -76,6 +79,18 @@ public sealed class InvoiceDeliveryController(
             Channels: request.Channels,
             Force: true), ct);
         return Ok(result);
+    }
+
+    private async Task<bool> CanShareAsync() =>
+        (await authorization.AuthorizeAsync(User, Policies.InvoiceCreate)).Succeeded
+        || (await authorization.AuthorizeAsync(User, Policies.InvoiceTransmit)).Succeeded;
+
+    private async Task RequireShareableAsync(Invoice invoice, CancellationToken ct)
+    {
+        if (!await documents.HasShareableEvidenceAsync(invoice, ct))
+        {
+            throw new DomainException("INVOICE_NOT_ISSUED", "Fatura dış paylaşım için uygun değil.");
+        }
     }
 }
 
@@ -204,8 +219,17 @@ public sealed class PublicInvoiceController(InvoiceDocumentService documents) : 
         return File(xml, "application/xml", InvoiceDocumentService.FileBaseName(invoice) + ".xml");
     }
 
-    private async Task<Invoice?> ResolveAsync(string token, CancellationToken ct) =>
-        token.Length is > 20 and < 1000 && documents.ReadToken(token) is { } ids ? await documents.LoadAsync(ids.TenantId, ids.InvoiceId, ct) : null;
+    private async Task<Invoice?> ResolveAsync(string token, CancellationToken ct)
+    {
+        if (token.Length is > 20 and < 1000 && documents.ReadToken(token) is { } ids
+            && await documents.LoadAsync(ids.TenantId, ids.InvoiceId, ct) is { } invoice
+            && await documents.HasShareableEvidenceAsync(invoice, ct))
+        {
+            return invoice;
+        }
+
+        return null;
+    }
 
     private const string NotFoundPage = """
         <!doctype html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Fatura bulunamadı</title>

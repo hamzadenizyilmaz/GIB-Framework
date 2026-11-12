@@ -1,11 +1,18 @@
+import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { api } from '../api.js';
 import { fmtDate, fmtMoney, istanbulNow, ROLE_LABELS } from '../format.js';
 import { useSession } from '../session.jsx';
-import { Card, DocTypeBadge, Empty, Spinner, StatusBadge, useLoad } from '../components/ui.jsx';
+import { Card, DocTypeBadge, Empty, ErrorAlert, Spinner, StatusBadge, useLoad } from '../components/ui.jsx';
 
 const MONTHS = ['Oca', 'Şub', 'Mar', 'Nis', 'May', 'Haz', 'Tem', 'Ağu', 'Eyl', 'Eki', 'Kas', 'Ara'];
-const COUNTED = new Set(['Approved', 'Signing', 'Signed', 'Queued', 'Transmitting', 'InDoubt', 'Sent', 'Acknowledged', 'Delivered', 'Accepted']);
+const ISSUED = new Set(['Sent', 'Acknowledged', 'Delivered', 'Accepted']);
+const TASKS = [
+  { task: 'approve', policy: 'InvoiceApprove', title: 'Onayınızı bekleyen', icon: 'hourglass-split', color: 'warning', empty: 'Onay bekleyen fatura yok.' },
+  { task: 'sign', policy: 'InvoiceSign', title: 'İmza bekleyen', icon: 'pen', color: 'primary', empty: 'İmza bekleyen fatura yok.' },
+  { task: 'send', policy: 'InvoiceTransmit', title: 'Gönderim bekleyen', icon: 'send', color: 'info', empty: 'Gönderim bekleyen fatura yok.' },
+  { task: 'draft', policy: 'InvoiceCreate', title: 'Taslaklarınız', icon: 'pencil-square', color: 'secondary', empty: 'Taslak yok.' },
+];
 
 function greeting(hour) {
   if (hour < 6) return 'İyi geceler';
@@ -29,22 +36,22 @@ function Kpi({ icon, color, label, value, hint }) {
   );
 }
 
-function MonthlyChart({ invoices }) {
+function MonthlyChart({ groups, currency }) {
   const now = istanbulNow().date;
   const [y, m] = now.split('-').map(Number);
   const months = Array.from({ length: 6 }, (_, i) => {
     const d = new Date(Date.UTC(y, m - 1 - (5 - i), 1));
     return { key: `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`, label: MONTHS[d.getUTCMonth()] };
   });
-  const totals = months.map((mo) => invoices
-    .filter((i) => i.currency === 'TRY' && COUNTED.has(i.status) && i.issueDate.startsWith(mo.key))
-    .reduce((s, i) => s + Number(i.payableAmount || 0), 0));
+  const totals = months.map((mo) => groups
+    .filter((i) => i.currency === currency && ISSUED.has(i.status) && i.month?.startsWith(mo.key))
+    .reduce((s, i) => s + i.amount, 0));
   const max = Math.max(...totals, 1);
   return (
-    <div className="chart-bars" role="img" aria-label="Son 6 ay fatura toplamları">
+    <div className="chart-bars" role="img" aria-label={months.map((mo, i) => `${mo.label} ${fmtMoney(totals[i], currency)}`).join(', ')}>
       {months.map((mo, i) => (
-        <div className="chart-bar" key={mo.key} title={`${mo.label}: ${fmtMoney(totals[i])}`}>
-          <small className="fw-semibold text-body">{totals[i] ? fmtMoney(totals[i]).replace(',00', '') : ''}</small>
+        <div className="chart-bar" key={mo.key} title={`${mo.label}: ${fmtMoney(totals[i], currency)}`}>
+          <small className="fw-semibold text-body">{totals[i] ? fmtMoney(totals[i], currency) : ''}</small>
           <div className={`bar ${totals[i] ? '' : 'muted'}`} style={{ height: `${Math.max(3, (totals[i] / max) * 100)}%` }} />
           <small>{mo.label}</small>
         </div>
@@ -53,11 +60,16 @@ function MonthlyChart({ invoices }) {
   );
 }
 
-function TaskList({ title, icon, color, items, empty }) {
+function TaskList({ task, title, icon, color, empty }) {
   const navigate = useNavigate();
+  const [skip, setSkip] = useState(0);
+  const { data, loading, error, reload } = useLoad(() => api.get(`/api/v1/invoices/tasks/${task}?skip=${skip}&take=5`), [task, skip]);
+  const items = data?.items || [];
   return (
-    <Card title={<>{title} <span className={`badge text-bg-${color} ms-1`}>{items.length}</span></>} icon={icon} bodyClass="">
-      {items.length ? (
+    <Card title={<>{title} {data && <span className={`badge text-bg-${color} ms-1`}>{data.total}</span>}</>} icon={icon} bodyClass="">
+      {loading ? <div className="px-3"><Spinner /></div> : error ? (
+        <div className="card-body"><ErrorAlert error={error} /><button className="btn btn-outline-secondary btn-sm" onClick={reload}>Tekrar dene</button></div>
+      ) : items.length ? (
         <div className="list-group list-group-flush">
           {items.slice(0, 5).map((i) => (
             <button key={i.id} type="button" className="list-group-item list-group-item-action d-flex justify-content-between align-items-center gap-2" onClick={() => navigate(`/invoices/${i.id}`)}>
@@ -70,48 +82,42 @@ function TaskList({ title, icon, color, items, empty }) {
           ))}
         </div>
       ) : <div className="card-body small text-body-secondary py-4 text-center">{empty}</div>}
+      {data && (skip > 0 || data.total > 5) && <div className="card-footer d-flex justify-content-between">
+        <button className="btn btn-outline-secondary btn-sm" disabled={skip === 0} onClick={() => setSkip(skip - 5)}>Önceki</button>
+        <button className="btn btn-outline-secondary btn-sm" disabled={skip + 5 >= data.total} onClick={() => setSkip(skip + 5)}>Sonraki</button>
+      </div>}
     </Card>
   );
 }
 
 export function Dashboard() {
   const session = useSession();
-  const navigate = useNavigate();
   const p = session.permissions;
   const tenantId = p.tenantId || session.tenantOverride;
   const now = istanbulNow();
+  const [currency, setCurrency] = useState('TRY');
+  const canRead = session.can('InvoiceRead') && !!tenantId;
 
-  const { data, loading } = useLoad(async () => {
-    const [page, cert, portal, locations] = await Promise.all([
-      session.can('InvoiceRead') && tenantId ? api.get('/api/v1/invoices/page?take=5000').catch(() => null) : null,
+  const { data, loading, error, reload } = useLoad(async () => {
+    const [groups, page, cert, portal, locations] = await Promise.all([
+      canRead ? api.get('/api/v1/invoices/overview') : null,
+      canRead ? api.get('/api/v1/invoices/page?take=8') : null,
       api.get('/api/v1/certificates/current').catch(() => null),
       session.can('GibPortal') && tenantId ? api.get('/api/v1/gib-portal/status').catch(() => null) : null,
       api.get('/api/v1/locations/status').catch(() => null),
     ]);
-    return { invoices: page?.items || null, cert, portal, locations };
-  }, [tenantId]);
+    return { groups, invoices: page?.items || null, cert, portal, locations };
+  }, [tenantId, canRead]);
 
   const invoices = data?.invoices;
-  const me = p.userId?.toLowerCase();
-  const selfApprove = p.roles.some((r) => (p.selfApprovalRoles || []).includes(r)) || !p.requireMakerChecker;
+  const groups = data?.groups || [];
   const thisMonth = now.date.slice(0, 7);
-  const monthItems = (invoices || []).filter((i) => i.issueDate.startsWith(thisMonth) && COUNTED.has(i.status));
-  const monthTotal = monthItems.filter((i) => i.currency === 'TRY').reduce((s, i) => s + Number(i.payableAmount || 0), 0);
-  const tasks = [];
-  if (invoices && session.can('InvoiceApprove')) {
-    tasks.push({ key: 'approve', title: 'Onayınızı bekleyen', icon: 'hourglass-split', color: 'warning', empty: 'Onay bekleyen fatura yok.',
-      items: invoices.filter((i) => i.status === 'AwaitingApproval' && (selfApprove || i.createdBy.toLowerCase() !== me)) });
-  }
-  if (invoices && session.can('InvoiceSign')) {
-    tasks.push({ key: 'sign', title: 'İmza bekleyen', icon: 'pen', color: 'primary', empty: 'İmza bekleyen fatura yok.', items: invoices.filter((i) => ['Approved', 'Signing'].includes(i.status)) });
-  }
-  if (invoices && session.can('InvoiceTransmit')) {
-    tasks.push({ key: 'send', title: 'Gönderim bekleyen', icon: 'send', color: 'info', empty: 'Gönderim bekleyen fatura yok.', items: invoices.filter((i) => ['Queued', 'Failed', 'InDoubt'].includes(i.status)) });
-  }
-  if (invoices && session.can('InvoiceCreate')) {
-    tasks.push({ key: 'draft', title: 'Taslaklarınız', icon: 'pencil-square', color: 'secondary', empty: 'Taslak yok.', items: invoices.filter((i) => i.status === 'Draft' && i.createdBy.toLowerCase() === me) });
-  }
-  const pending = tasks.reduce((s, t) => s + t.items.length, 0);
+  const monthItems = groups.filter((i) => i.month?.startsWith(thisMonth) && ISSUED.has(i.status) && i.currency === currency);
+  const monthTotal = monthItems.reduce((s, i) => s + i.amount, 0);
+  const count = (rows) => rows.reduce((s, i) => s + i.count, 0);
+  const currencies = [...new Set(['TRY', ...groups.map((i) => i.currency)])];
+  const tasks = canRead ? TASKS.filter((task) => session.can(task.policy)
+    && (task.task !== 'send' || p.integratorAvailable)) : [];
 
   return (
     <>
@@ -133,27 +139,31 @@ export function Dashboard() {
         <div className="alert alert-info d-flex align-items-center gap-2"><i className="bi bi-info-circle" />Fatura işlemleri için üst çubuktan bir firma seçin.</div>
       )}
 
-      {loading ? <Spinner /> : (
+      {loading ? <Spinner /> : error ? <Card title="Panel verileri yüklenemedi">
+        <ErrorAlert error={error} /><button className="btn btn-primary" onClick={reload}>Tekrar dene</button>
+      </Card> : (
         <>
           {invoices && (
-            <div className="row row-cols-1 row-cols-sm-2 row-cols-xl-4 g-3 mb-4">
-              <div className="col"><Kpi icon="cash-stack" color="primary" label="Bu ay düzenlenen (TL)" value={fmtMoney(monthTotal)} hint={`${monthItems.length} fatura`} /></div>
-              <div className="col"><Kpi icon="list-check" color="warning" label="Bekleyen işleriniz" value={pending} /></div>
-              <div className="col"><Kpi icon="file-earmark-text" color="info" label="e-Arşiv / e-Fatura" value={`${invoices.filter((i) => i.documentType === 'EArsiv').length} / ${invoices.filter((i) => i.documentType === 'EFatura').length}`} /></div>
-              <div className="col"><Kpi icon="check2-circle" color="success" label="Gönderildi" value={invoices.filter((i) => ['Sent', 'Acknowledged', 'Delivered', 'Accepted'].includes(i.status)).length} hint={`Toplam ${invoices.length} fatura`} /></div>
+            <div className="row row-cols-1 row-cols-sm-2 row-cols-xl-3 g-3 mb-4">
+              <div className="col"><Kpi icon="cash-stack" color="primary" label={`Bu ay düzenlenen · ${currency}`} value={fmtMoney(monthTotal, currency)} hint={`${count(monthItems)} fatura`} /></div>
+              <div className="col"><Kpi icon="file-earmark-text" color="info" label="e-Arşiv / e-Fatura" value={`${count(groups.filter((i) => i.documentType === 'EArsiv'))} / ${count(groups.filter((i) => i.documentType === 'EFatura'))}`} /></div>
+              <div className="col"><Kpi icon="check2-circle" color="success" label="Gönderildi" value={count(groups.filter((i) => ISSUED.has(i.status)))} hint={`Toplam ${count(groups)} fatura`} /></div>
             </div>
           )}
 
           <div className="row g-4">
             <div className="col-xl-8 d-flex flex-column gap-4">
               {invoices && (
-                <Card title="Son 6 ay" icon="bar-chart">
-                  <MonthlyChart invoices={invoices} />
+                <Card title="Son 6 ay" icon="bar-chart" actions={
+                  <select className="form-select form-select-sm" aria-label="Para birimi" value={currency} onChange={(event) => setCurrency(event.target.value)}>
+                    {currencies.map((code) => <option key={code}>{code}</option>)}
+                  </select>}>
+                  <MonthlyChart groups={groups} currency={currency} />
                 </Card>
               )}
               {tasks.length > 0 && (
                 <div className="row g-4">
-                  {tasks.map((t) => <div className="col-md-6" key={t.key}><TaskList {...t} /></div>)}
+                  {tasks.map((t) => <div className="col-md-6" key={t.task}><TaskList {...t} /></div>)}
                 </div>
               )}
               {invoices && (
@@ -165,8 +175,8 @@ export function Dashboard() {
                         <thead><tr><th>Belge no</th><th>Tarih</th><th>Tür</th><th>Alıcı</th><th className="num">Tutar</th><th>Durum</th></tr></thead>
                         <tbody>
                           {invoices.slice(0, 8).map((i) => (
-                            <tr key={i.id} onClick={() => navigate(`/invoices/${i.id}`)}>
-                              <td className="mono">{i.documentNumber || <span className="text-body-secondary">{i.draftNumber}</span>}</td>
+                            <tr key={i.id}>
+                              <td className="mono"><Link to={`/invoices/${i.id}`}>{i.documentNumber || i.draftNumber}</Link></td>
                               <td>{fmtDate(i.issueDate)}</td>
                               <td><DocTypeBadge type={i.documentType} /></td>
                               <td><div className="text-truncate" style={{ maxWidth: '16rem' }}>{i.customerTitle || i.customerTaxId}</div></td>

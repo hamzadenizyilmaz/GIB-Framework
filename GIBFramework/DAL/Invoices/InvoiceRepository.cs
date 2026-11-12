@@ -11,7 +11,9 @@ public sealed record InvoiceQuery(
     int Take = 50,
     int Skip = 0,
     EDocumentType? DocumentType = null,
-    string? Search = null)
+    string? Search = null,
+    string? Task = null,
+    string? Actor = null)
 {
     public const int MaxTake = 5000;
 }
@@ -34,6 +36,7 @@ public sealed record InvoiceSummary(
     DateTimeOffset UpdatedAt);
 
 public sealed record InvoicePage(IReadOnlyList<InvoiceSummary> Items, int Total);
+public sealed record InvoiceOverviewRow(DateOnly? Month, EDocumentType DocumentType, DocumentStatus Status, string Currency, int Count, decimal Amount);
 
 public sealed record InvoiceHistoryEntry(DocumentStatus? From, DocumentStatus To, string Actor, string? Note, DateTimeOffset At);
 
@@ -48,6 +51,7 @@ public interface IInvoiceRepository
     Task<Invoice?> GetByIdempotencyKeyAsync(SqlConnection connection, Guid tenantId, string key, CancellationToken cancellationToken);
 
     Task<InvoicePage> ListAsync(SqlConnection connection, Guid tenantId, InvoiceQuery query, CancellationToken cancellationToken);
+    Task<IReadOnlyList<InvoiceOverviewRow>> OverviewAsync(SqlConnection connection, Guid tenantId, DateOnly from, DateOnly through, CancellationToken ct);
 
     Task AddHistoryAsync(DbScope scope, Invoice invoice, DocumentStatus? from, string actor, string? note, CancellationToken cancellationToken);
 
@@ -135,30 +139,37 @@ public sealed class InvoiceRepository : IInvoiceRepository
         return await ReadSingleAsync(cmd, cancellationToken);
     }
 
-    public async Task<InvoicePage> ListAsync(SqlConnection connection, Guid tenantId, InvoiceQuery query, CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(query);
-        await using var cmd = connection.Command("""
-            SELECT Id, Ettn, DocumentNumber, DraftNumber, DocumentType, Profile, Status, IssueDate, CustomerTaxId, PayableAmount, Currency,
-                   CreatedBy, UpdatedAt, JSON_VALUE(ContentJson, '$.customer.title') AS CustomerTitle,
-                   JSON_VALUE(ContentJson, '$.issuanceChannel') AS Channel, COUNT(*) OVER () AS TotalCount
-              FROM dbo.Invoices
+    private const string InvoiceFilterSql = """
              WHERE TenantId = @t
                AND (@s IS NULL OR Status = @s)
                AND (@dt IS NULL OR DocumentType = @dt)
                AND (@from IS NULL OR IssueDate >= @from)
                AND (@to IS NULL OR IssueDate <= @to)
                AND (@c IS NULL OR CustomerTaxId = @c)
+               AND (@task IS NULL
+                    OR (@task = 'approve' AND Status = 'AwaitingApproval' AND (@actor IS NULL OR CreatedBy <> @actor))
+                    OR (@task = 'sign' AND Status IN ('Approved', 'Signing'))
+                    OR (@task = 'send' AND Status IN ('Queued', 'Failed', 'InDoubt'))
+                    OR (@task = 'draft' AND Status = 'Draft' AND CreatedBy = @actor))
                AND (@q IS NULL OR DocumentNumber LIKE @q OR DraftNumber LIKE @q OR CustomerTaxId LIKE @q
                     OR JSON_VALUE(ContentJson, '$.customer.title') LIKE @q)
+            """;
+
+    public async Task<InvoicePage> ListAsync(SqlConnection connection, Guid tenantId, InvoiceQuery query, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        await using var cmd = connection.Command($$"""
+            SELECT Id, Ettn, DocumentNumber, DraftNumber, DocumentType, Profile, Status, IssueDate, CustomerTaxId, PayableAmount, Currency,
+                   CreatedBy, UpdatedAt, JSON_VALUE(ContentJson, '$.customer.title') AS CustomerTitle,
+                   JSON_VALUE(ContentJson, '$.issuanceChannel') AS Channel, COUNT(*) OVER () AS TotalCount
+              FROM dbo.Invoices
+             {{InvoiceFilterSql}}
              ORDER BY IssueDate DESC, ClusterKey DESC
             OFFSET @skip ROWS FETCH NEXT @take ROWS ONLY
             """);
         var search = string.IsNullOrWhiteSpace(query.Search) ? null : "%" + query.Search.Trim().Replace("[", "[[]", StringComparison.Ordinal).Replace("%", "[%]", StringComparison.Ordinal).Replace("_", "[_]", StringComparison.Ordinal) + "%";
-        cmd.With("@t", tenantId).With("@s", query.Status?.ToString()).With("@dt", query.DocumentType?.ToString())
-            .With("@from", query.From?.ToDateTime(TimeOnly.MinValue)).With("@to", query.To?.ToDateTime(TimeOnly.MinValue))
-            .With("@c", query.CustomerTaxId).With("@q", search)
-            .With("@skip", Math.Max(query.Skip, 0)).With("@take", Math.Clamp(query.Take, 1, InvoiceQuery.MaxTake));
+        AddFilters(cmd, tenantId, query, search);
+        cmd.With("@skip", Math.Max(query.Skip, 0)).With("@take", Math.Clamp(query.Take, 1, InvoiceQuery.MaxTake));
 
         var list = new List<InvoiceSummary>();
         var total = 0;
@@ -186,11 +197,42 @@ public sealed class InvoiceRepository : IInvoiceRepository
 
         if (list.Count == 0 && query.Skip > 0)
         {
-            await using var count = connection.Command("SELECT COUNT(*) FROM dbo.Invoices WHERE TenantId = @t");
-            total = (int)(await count.With("@t", tenantId).ExecuteScalarAsync(cancellationToken) ?? 0);
+            await r.CloseAsync();
+            await using var count = connection.Command("SELECT COUNT(*) FROM dbo.Invoices " + InvoiceFilterSql);
+            AddFilters(count, tenantId, query, search);
+            total = (int)(await count.ExecuteScalarAsync(cancellationToken) ?? 0);
         }
 
         return new InvoicePage(list, total);
+    }
+
+    private static void AddFilters(SqlCommand cmd, Guid tenantId, InvoiceQuery query, string? search) =>
+        cmd.With("@t", tenantId).With("@s", query.Status?.ToString()).With("@dt", query.DocumentType?.ToString())
+            .With("@from", query.From?.ToDateTime(TimeOnly.MinValue)).With("@to", query.To?.ToDateTime(TimeOnly.MinValue))
+            .With("@c", query.CustomerTaxId).With("@q", search).With("@task", query.Task).With("@actor", query.Actor);
+
+    public async Task<IReadOnlyList<InvoiceOverviewRow>> OverviewAsync(SqlConnection connection, Guid tenantId, DateOnly from, DateOnly through, CancellationToken ct)
+    {
+        await using var cmd = connection.Command("""
+            SELECT v.Month, i.DocumentType, i.Status, i.Currency, COUNT(*) AS InvoiceCount, SUM(i.PayableAmount) AS Amount
+            FROM dbo.Invoices i
+            CROSS APPLY (VALUES (CASE WHEN i.IssueDate BETWEEN @from AND @through
+                THEN DATEFROMPARTS(YEAR(i.IssueDate), MONTH(i.IssueDate), 1) END)) v(Month)
+            WHERE i.TenantId = @t
+            GROUP BY v.Month, i.DocumentType, i.Status, i.Currency
+            """);
+        cmd.With("@t", tenantId).With("@from", from.ToDateTime(TimeOnly.MinValue)).With("@through", through.ToDateTime(TimeOnly.MinValue));
+        var groups = new List<InvoiceOverviewRow>();
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        while (await r.ReadAsync(ct))
+        {
+            groups.Add(new InvoiceOverviewRow(
+                r.IsDBNull(0) ? null : DateOnly.FromDateTime(r.GetDateTime(0)),
+                Enum.Parse<EDocumentType>(r.GetString(1)), Enum.Parse<DocumentStatus>(r.GetString(2)), r.GetString(3),
+                r.GetInt32(4), r.GetDecimal(5)));
+        }
+
+        return groups;
     }
 
     public async Task AddHistoryAsync(DbScope scope, Invoice invoice, DocumentStatus? from, string actor, string? note, CancellationToken cancellationToken)
@@ -362,12 +404,15 @@ internal sealed record InvoiceContent(
     string SendingType,
     InvoiceTotals Totals,
     IssuanceChannel IssuanceChannel = IssuanceChannel.Integrator,
-    GibPortalEnvironment? PortalEnvironment = null)
+    GibPortalEnvironment? PortalEnvironment = null,
+    bool PortalEvidenceVerified = false,
+    bool PortalSignatureRequested = false,
+    bool PortalApprovalPending = false)
 {
     public static InvoiceContent From(Invoice i) => new(
         i.DocumentType, i.Profile, i.TypeCode, i.IssueDate, i.IssueTime, i.DeliveryDate, i.Currency, i.ExchangeRate, i.Supplier, i.Customer,
         i.Lines, i.Notes, i.DespatchRequired, i.DespatchNumber, i.DespatchDate, i.OrderNumber, i.SendingType, i.Totals,
-        i.IssuanceChannel, i.PortalEnvironment);
+        i.IssuanceChannel, i.PortalEnvironment, i.PortalEvidenceVerified, i.PortalSignatureRequested, i.PortalApprovalPending);
 
     public void ApplyTo(Invoice i)
     {
@@ -391,5 +436,8 @@ internal sealed record InvoiceContent(
         i.Totals = Totals;
         i.IssuanceChannel = IssuanceChannel;
         i.PortalEnvironment = PortalEnvironment;
+        i.PortalEvidenceVerified = PortalEvidenceVerified;
+        i.PortalSignatureRequested = PortalSignatureRequested;
+        i.PortalApprovalPending = PortalApprovalPending;
     }
 }

@@ -9,13 +9,14 @@ using GIBFramework.Models.Integrations;
 
 namespace GIBFramework.Services.Integrations;
 
-public sealed record MarketplaceOrder(InboundOrder Order, string Raw);
+public sealed record MarketplaceOrder(InboundOrder Order, string Raw, bool IsMicroExport = false);
 
 public sealed record MarketplaceInvoiceLink(string ExternalId, string? OrderNumber, string Link, string DocumentNumber, DateTimeOffset IssuedAt);
 
-public sealed class MarketplaceException(string message, bool transient = false) : Exception(message)
+public sealed class MarketplaceException(string message, bool transient = false, TimeSpan? retryAfter = null) : Exception(message)
 {
     public bool Transient { get; } = transient;
+    public TimeSpan? RetryAfter { get; } = retryAfter;
 }
 
 public interface IMarketplaceClient
@@ -58,7 +59,9 @@ public abstract class MarketplaceClientBase(IHttpClientFactory httpFactory)
                 case 401 or 403:
                     throw new MarketplaceException($"Pazaryeri kimlik doğrulaması başarısız (HTTP {status}); API bilgilerini ve User-Agent değerini kontrol edin.");
                 case 429:
-                    throw new MarketplaceException("Pazaryeri istek sınırı aşıldı (HTTP 429).", transient: true);
+                    var retry = response.Headers.RetryAfter;
+                    throw new MarketplaceException("Pazaryeri istek sınırı aşıldı (HTTP 429).", transient: true,
+                        retryAfter: retry?.Delta ?? (retry?.Date is { } date ? date - DateTimeOffset.UtcNow : null));
                 case >= 500:
                     throw new MarketplaceException($"Pazaryeri API'si HTTP {status} döndürdü.", transient: true);
             }
@@ -203,32 +206,46 @@ public sealed class TrendyolClient(IHttpClientFactory httpFactory, MarketplaceOp
         var sellerId = Require(integration, "sellerId", "Satıcı ID");
         var statuses = integration.Setting("statuses") ?? "Created";
         var list = new List<MarketplaceOrder>();
-        for (var page = 0; page < 50; page++)
+        await FetchWindowAsync(from.ToUnixTimeMilliseconds(), to.ToUnixTimeMilliseconds());
+        return list;
+
+        async Task FetchWindowAsync(long start, long end)
         {
-            var url = $"{Base(integration)}/integration/order/sellers/{Uri.EscapeDataString(sellerId)}/v2/orders?status={Uri.EscapeDataString(statuses)}"
-                + $"&startDate={from.ToUnixTimeMilliseconds()}&endDate={to.ToUnixTimeMilliseconds()}&orderByField=PackageLastModifiedDate&orderByDirection=ASC&page={page}&size=200";
-            using var request = Request(HttpMethod.Get, url, integration, secrets);
-            var (status, body) = await SendAsync(request, ct);
-            if (status >= 400)
+            for (var page = 0; page < 50; page++)
             {
-                throw new MarketplaceException($"Trendyol sipariş listesi HTTP {status}: {Short(body)}");
-            }
+                var url = $"{Base(integration)}/integration/order/sellers/{Uri.EscapeDataString(sellerId)}/v2/orders?status={Uri.EscapeDataString(statuses)}"
+                    + $"&startDate={start}&endDate={end}&orderByField=PackageLastModifiedDate&orderByDirection=ASC&page={page}&size=200";
+                using var request = Request(HttpMethod.Get, url, integration, secrets);
+                var (status, body) = await SendAsync(request, ct);
+                if (status >= 400)
+                {
+                    throw new MarketplaceException($"Trendyol sipariş listesi HTTP {status}.");
+                }
 
-            using var doc = Parse(body);
-            var root = doc.RootElement;
-            foreach (var p in Arr(root, "content"))
-            {
-                list.Add(new MarketplaceOrder(Map(integration, p), p.GetRawText()));
-            }
+                using var doc = Parse(body);
+                var root = doc.RootElement;
+                var totalPages = (int)Dec(root, "totalPages");
+                if (totalPages >= 50 || Dec(root, "totalElements") >= 10000)
+                {
+                    if (page != 0 || start >= end)
+                    {
+                        throw new MarketplaceException("Trendyol sipariş penceresi eksiksiz okunamadı.");
+                    }
 
-            var totalPages = (int)Dec(root, "totalPages");
-            if (page + 1 >= totalPages)
-            {
-                break;
+                    var middle = start + (end - start) / 2;
+                    await FetchWindowAsync(start, middle);
+                    await FetchWindowAsync(middle + 1, end);
+                    return;
+                }
+
+                foreach (var p in Arr(root, "content"))
+                {
+                    list.Add(new MarketplaceOrder(Map(integration, p), p.GetRawText(),
+                        Str(p, "micro", "microExport", "isMicroExport") is "true" or "1"));
+                }
+                if (page + 1 >= totalPages) return;
             }
         }
-
-        return list;
     }
 
     private static InboundOrder Map(Integration integration, JsonElement p)
@@ -331,7 +348,7 @@ public sealed class HepsiburadaClient(IHttpClientFactory httpFactory, Marketplac
             {
                 if (Map(integration, p) is { } order)
                 {
-                    list.Add(new MarketplaceOrder(order, p.GetRawText()));
+                    list.Add(new MarketplaceOrder(order, p.GetRawText(), Str(p, "micro", "microExport", "isMicroExport") is "true" or "1"));
                 }
             }
 
@@ -427,11 +444,15 @@ public sealed class N11Client(IHttpClientFactory httpFactory, MarketplaceOptions
             {
                 if (Map(integration, p) is { } order)
                 {
-                    list.Add(new MarketplaceOrder(order, p.GetRawText()));
+                    list.Add(new MarketplaceOrder(order, p.GetRawText(), Str(p, "micro", "microExport", "isMicroExport") is "true" or "1"));
                 }
             }
 
             var totalPages = (int)Dec(doc.RootElement, "totalPages");
+            if (totalPages > 100)
+            {
+                throw new MarketplaceException("n11 sipariş penceresi eksiksiz okunamadı.");
+            }
             if (content.Count == 0 || page + 1 >= totalPages)
             {
                 break;

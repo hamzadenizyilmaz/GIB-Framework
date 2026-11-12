@@ -73,10 +73,10 @@ const ACTIONS = [
   { id: 'submit', label: 'Doğrulamaya gönder', icon: 'check2-square', variant: 'primary', policy: 'InvoiceCreate', when: (i) => i.status === 'Draft' },
   { id: 'approve', label: 'Onayla', icon: 'hand-thumbs-up', variant: 'success', policy: 'InvoiceApprove', when: (i) => i.status === 'AwaitingApproval' },
   { id: 'reject', label: 'Reddet', icon: 'hand-thumbs-down', variant: 'outline-danger', policy: 'InvoiceApprove', when: (i) => i.status === 'AwaitingApproval' },
-  { id: 'sign', label: 'İmzala (Mali Mühür)', icon: 'pen', variant: 'primary', policy: 'InvoiceSign', when: (i) => i.status === 'Approved' },
+  { id: 'sign', label: 'Yerel imza', icon: 'pen', variant: 'primary', policy: 'InvoiceSign', when: (i) => i.status === 'Approved' || (i.status === 'Signing' && !isPortal(i)) },
   { id: 'portal-draft', label: "GİB e-Arşiv Portal'da düzenle", icon: 'bank', variant: 'outline-primary', policy: 'GibPortal', when: (i) => i.status === 'Approved' && i.documentType === 'EArsiv' },
   { id: 'portal-preview', label: 'GİB önizleme', icon: 'eye', variant: 'outline-secondary', policy: 'GibPortal', when: (i) => i.status === 'Signing' && isPortal(i) },
-  { id: 'portal-sms', label: 'SMS onay kodu gönder', icon: 'phone', variant: 'outline-primary', policy: 'InvoiceSign', when: (i) => i.status === 'Signing' && isPortal(i) && i.portalEnvironment === 'Production' },
+  { id: 'portal-sms', label: 'SMS onay kodu gönder', icon: 'phone', variant: 'outline-primary', policy: 'InvoiceSign', when: (i) => i.status === 'Signing' && isPortal(i) && i.portalEnvironment === 'Production' && !i.portalReconciliationRequired },
   { id: 'portal-sign', label: 'GİB ile imzala', icon: 'patch-check', variant: 'success', policy: 'InvoiceSign', when: (i) => i.status === 'Signing' && isPortal(i) },
   { id: 'portal-delete', label: 'Portal taslağını sil', icon: 'trash', variant: 'outline-danger', policy: 'GibPortal', when: (i) => i.status === 'Signing' && isPortal(i) },
   { id: 'transmit', label: 'Gönder', icon: 'send', variant: 'primary', policy: 'InvoiceTransmit', when: (i) => i.status === 'Queued' },
@@ -88,6 +88,7 @@ const ACTIONS = [
 ];
 
 const REASON_FIELD = [{ name: 'reason', label: 'Gerekçe', type: 'textarea', required: true, min: 3, invalid: 'En az 3 karakterlik bir gerekçe yazın.' }];
+const INTEGRATOR_ACTIONS = new Set(['sign', 'transmit', 'refresh', 'retry', 'cancel']);
 
 function Party({ title, party, showRegistration }) {
   return (
@@ -127,7 +128,10 @@ export function InvoiceDetail() {
   const selfApprovalBlocked = p.requireMakerChecker && i.createdBy?.toLowerCase() === p.userId?.toLowerCase()
     && !p.roles.some((r) => (p.selfApprovalRoles || []).includes(r));
   const blocking = (d?.findings || []).filter((f) => f.blocking && f.code !== 'COMPLIANCE-UNAPPROVED-RULES');
-  const actions = ACTIONS.filter((a) => a.when(i) && session.can(a.policy) && !(selfApprovalBlocked && (a.id === 'approve' || a.id === 'reject')));
+  const actions = ACTIONS.filter((a) => a.when(i) && session.can(a.policy)
+    && (!a.id.startsWith('portal-') || (p.portalEnabled && session.can('GibPortal')))
+    && (!INTEGRATOR_ACTIONS.has(a.id) || p.integratorAvailable)
+    && !(selfApprovalBlocked && (a.id === 'approve' || a.id === 'reject')));
   const base = `/api/v1/invoices/${i.id}`;
   const portal = `/api/v1/gib-portal/invoices/${i.id}`;
 
@@ -166,18 +170,23 @@ export function InvoiceDetail() {
       }
       case 'portal-sign': {
         let smsCode = null;
-        if (i.portalEnvironment === 'Production') {
+        if (!i.portalReconciliationRequired && i.portalEnvironment === 'Production') {
           const f = await dialogs.form({
             title: 'GİB imza — SMS onayı', submitText: 'İmzala', submitVariant: 'success',
             fields: [{ name: 'smsCode', label: 'SMS kodu', required: true, pattern: '[0-9]{6}', inputmode: 'numeric', autocomplete: 'one-time-code', invalid: '6 haneli kod girin.' }],
           });
           if (!f) return;
           smsCode = f.smsCode;
-        } else if (!await dialogs.confirm('GİB imza (test portalı)', 'Fatura test portalının imza komutuyla imzalanacak.', 'İmzala', 'success')) {
+        } else if (!i.portalReconciliationRequired && !await dialogs.confirm('GİB imza (test portalı)', 'Fatura test portalının imza komutuyla imzalanacak.', 'İmzala', 'success')) {
           return;
         }
-        await api.post(`${portal}/sign`, { smsCode }); toast('Fatura GİB tarafından imzalandı ve düzenlendi.');
-        break;
+        try {
+          await api.post(`${portal}/sign`, { smsCode });
+          toast('Fatura GİB tarafından imzalandı ve düzenlendi.');
+        } finally {
+          await reload();
+        }
+        return;
       }
       case 'portal-delete': {
         const f = await dialogs.form({ title: 'Portal taslağını sil', fields: REASON_FIELD, submitText: 'Sil', submitVariant: 'danger' });
@@ -292,16 +301,16 @@ export function InvoiceDetail() {
       <Card className="mb-4">
         <div className="d-flex flex-wrap gap-2 align-items-center">
           {actions.length
-            ? actions.map((a) => <BusyButton key={a.id} className={`btn btn-${a.variant}`} onClick={() => run(a.id)}><i className={`bi bi-${a.icon} me-1`} />{a.label}</BusyButton>)
+            ? actions.map((a) => <BusyButton key={a.id} className={`btn btn-${a.variant}`} onClick={() => run(a.id)}><i className={`bi bi-${a.icon} me-1`} />{a.id === 'portal-sign' && i.portalReconciliationRequired ? 'GİB durumunu doğrula' : a.label}</BusyButton>)
             : <span className="text-body-secondary small">{selfApprovalBlocked && i.status === 'AwaitingApproval' ? 'Kendi oluşturduğunuz faturayı başka bir onaylayıcı onaylamalıdır.' : 'Bu aşamada işlem yok.'}</span>}
           {signed && <span className="vr mx-1" />}
           {signed && <BusyButton className="btn btn-outline-secondary" onClick={() => download(`${base}/ubl`, `${i.documentNumber || i.id}.xml`)}><i className="bi bi-filetype-xml me-1" />UBL indir</BusyButton>}
           {signed && !isPortal(i) && <BusyButton className="btn btn-outline-secondary" onClick={showQr}><i className="bi bi-qr-code me-1" />Karekod</BusyButton>}
-          {signed && isPortal(i) && <BusyButton className="btn btn-outline-secondary" onClick={async () => showHtml(await api.text(`${portal}/html`))}><i className="bi bi-file-earmark-richtext me-1" />GİB görünümü</BusyButton>}
+          {signed && isPortal(i) && session.can('GibPortal') && <BusyButton className="btn btn-outline-secondary" onClick={async () => showHtml(await api.text(`${portal}/html`))}><i className="bi bi-file-earmark-richtext me-1" />GİB görünümü</BusyButton>}
           {signed && session.can('AuditRead') && <BusyButton className="btn btn-outline-secondary" onClick={verify}><i className="bi bi-shield-check me-1" />Kanıt doğrula</BusyButton>}
-          {i.documentNumber && (session.can('InvoiceCreate') || session.can('InvoiceTransmit')) && <BusyButton className="btn btn-outline-primary" onClick={sendToCustomer}><i className="bi bi-send me-1" />Müşteriye gönder</BusyButton>}
+          {i.shareable && (session.can('InvoiceCreate') || session.can('InvoiceTransmit')) && <BusyButton className="btn btn-outline-primary" onClick={sendToCustomer}><i className="bi bi-send me-1" />Müşteriye gönder</BusyButton>}
           <BusyButton className="btn btn-outline-secondary" onClick={() => download(`${base}/pdf`, `${i.documentNumber || i.draftNumber || i.id}.pdf`)}><i className="bi bi-filetype-pdf me-1" />PDF indir</BusyButton>
-          <BusyButton className="btn btn-outline-secondary" onClick={share}><i className="bi bi-link-45deg me-1" />Görüntüle / paylaş</BusyButton>
+          {i.shareable && (session.can('InvoiceCreate') || session.can('InvoiceTransmit')) && <BusyButton className="btn btn-outline-secondary" onClick={share}><i className="bi bi-link-45deg me-1" />Görüntüle / paylaş</BusyButton>}
         </div>
       </Card>
 

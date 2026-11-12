@@ -19,7 +19,9 @@ public sealed record PermissionsResponse(
     bool RequireMakerChecker,
     IReadOnlyList<string> SelfApprovalRoles,
     bool MfaRequired = false,
-    int IdleLogoutMinutes = 0);
+    int IdleLogoutMinutes = 0,
+    bool IntegratorAvailable = false,
+    bool PortalEnabled = false);
 
 public sealed record ChangePasswordRequest(
     [Required, StringLength(200)] string CurrentPassword,

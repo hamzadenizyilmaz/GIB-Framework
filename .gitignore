@@ -497,4 +497,5 @@ GIBFramework/DAL/Gib/
 
 # Sunucuya özel ayarlar ve yayın çıktıları
 /publish/
+/artifacts/
 /GIBFramework/App_Data/

@@ -4,8 +4,8 @@
 
 | Sürüm | Güvenlik güncellemesi |
 |---|---|
-| 5.2.x | Destekleniyor |
-| 5.1.x ve öncesi | Desteklenmiyor |
+| 5.5.1 | Güncel güvenlik düzeltmeleri |
+| 5.2.x ve öncesi | 5.5.1'e yükseltin |
 
 ## Açık bildirimi
 
@@ -16,8 +16,8 @@ sahibine doğrudan iletin.
 Bildirimde aşağıdaki bilgilere yer verin:
 
 - Etkilenen sürüm ve bileşen
-- Açığı yeniden üretme adımları
-- Olası etki ve varsa kavram kanıtı
+- Sorunun koşulları ve olası etkisi
+- Gerekli günlük veya ekran görüntüsünün kişisel verileri ve sırları maskelenmiş kopyası
 
 ## Süreç
 
@@ -36,3 +36,9 @@ Bildirimde aşağıdaki bilgilere yer verin:
 - Fatura paylaşım bağlantıları
 - E-posta ve SMS şablonlarında içerik enjeksiyonu
 - İmza, kanıt kasası ve denetim izi bütünlüğü
+
+## Yayın ve sır yönetimi
+
+- Bağlantı parolasını ve JWT anahtarını dağıtım ortamından sağlayın. Ortama özel ayar dosyalarını, Data Protection anahtarlarını, günlükleri ve kanıt dosyalarını paylaşılan arşivlere eklemeyin.
+- Data Protection ve kanıt dizinlerine uygulama havuzu kimliğinin ve yetkili operatörlerin erişimini tanımlayın. Sürüm değişiminde mevcut anahtar dizinini koruyun. Bir sır ifşa olduysa ilgili sırları değiştirin ve eski erişimi iptal edin.
+- SQL şema yükseltmesini gerekli RLS yetkisi olan yönetici hesabıyla çalıştırın. Üretimde HTTPS, doğrulanmış SQL sertifika zinciri, bilinen proxy adresleri ve izinli giden bağlantı hedefleri kullanın.

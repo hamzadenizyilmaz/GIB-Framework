@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Caching.Memory;
 
@@ -16,7 +15,6 @@ public sealed record GibPortalSession(
 public sealed class GibPortalSessionStore(IMemoryCache cache, IDataProtectionProvider dataProtection, GibPortalOptions options)
 {
     private readonly IDataProtector _protector = dataProtection.CreateProtector("GIBFramework.GibPortal.Token.v1");
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _accountLocks = new(StringComparer.Ordinal);
 
     public void Save(GibPortalSession session, string token)
     {
@@ -35,28 +33,19 @@ public sealed class GibPortalSessionStore(IMemoryCache cache, IDataProtectionPro
 
     public void Remove(Guid tenantId, string userId) => cache.Remove(Key(tenantId, userId));
 
-    public void SavePendingSms(Guid invoiceId, string oid) =>
-        cache.Set("gibsms:" + invoiceId.ToString("N"), _protector.Protect(oid), TimeSpan.FromMinutes(5));
+    public void SavePendingSms(GibPortalSession session, Guid invoiceId, Guid ettn, string oid) =>
+        cache.Set(SmsKey(session, invoiceId, ettn), _protector.Protect(oid), TimeSpan.FromMinutes(5));
 
-    public string? TakePendingSms(Guid invoiceId)
-    {
-        var key = "gibsms:" + invoiceId.ToString("N");
-        if (!cache.TryGetValue<string>(key, out var protectedOid) || protectedOid is null)
-        {
-            return null;
-        }
+    public string? GetPendingSms(GibPortalSession session, Guid invoiceId, Guid ettn) =>
+        cache.TryGetValue<string>(SmsKey(session, invoiceId, ettn), out var oid) && oid is not null ? _protector.Unprotect(oid) : null;
 
-        cache.Remove(key);
-        return _protector.Unprotect(protectedOid);
-    }
-
-    public SemaphoreSlim AccountLock(GibPortalSession session)
-    {
-        ArgumentNullException.ThrowIfNull(session);
-        return _accountLocks.GetOrAdd($"{session.Environment}:{session.PortalTaxId}", _ => new SemaphoreSlim(1, 1));
-    }
+    public void RemovePendingSms(GibPortalSession session, Guid invoiceId, Guid ettn) =>
+        cache.Remove(SmsKey(session, invoiceId, ettn));
 
     private static string Key(Guid tenantId, string userId) => $"gibportal:{tenantId:N}:{userId.ToLowerInvariant()}";
+
+    private static string SmsKey(GibPortalSession session, Guid invoiceId, Guid ettn) =>
+        $"gibsms:{session.TenantId:N}:{session.OwnerUserId.ToLowerInvariant()}:{session.Environment}:{session.ConnectedAt.UtcTicks}:{invoiceId:N}:{ettn:N}";
 
     private sealed record Entry(GibPortalSession Session, string ProtectedToken);
 }

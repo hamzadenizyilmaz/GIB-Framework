@@ -17,7 +17,8 @@ public sealed record NotificationRequest(
     IReadOnlyDictionary<string, string>? Secrets = null,
     IReadOnlyCollection<MessageChannel>? Channels = null,
     bool Force = false,
-    bool Hold = false);
+    bool Hold = false,
+    long? OutboxEventId = null);
 
 public sealed record NotificationResult(int Queued, IReadOnlyList<string> Skipped)
 {
@@ -126,9 +127,10 @@ public sealed partial class NotificationService(
                 }
 
                 var id = Guid.CreateVersion7(now);
-                await messages.InsertAsync(new OutboundMessage
+                var inserted = await messages.InsertAsync(new OutboundMessage
                 {
                     Id = id,
+                    OutboxEventId = request.OutboxEventId,
                     TenantId = request.TenantId,
                     Channel = channel,
                     Recipient = address,
@@ -144,8 +146,11 @@ public sealed partial class NotificationService(
                     CreatedBy = request.CreatedBy,
                     CreatedAt = now,
                 }, ct);
-                ids.Add(id);
-                queued++;
+                if (inserted)
+                {
+                    ids.Add(id);
+                    queued++;
+                }
             }
         }
 

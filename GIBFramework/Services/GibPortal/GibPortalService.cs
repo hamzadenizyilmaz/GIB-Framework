@@ -1,5 +1,8 @@
 using System.IO.Compression;
 using System.Text;
+using System.Xml;
+using System.Xml.Schema;
+using GIBFramework.DAL;
 using GIBFramework.DAL.Tenants;
 using GIBFramework.Infrastructure.GibPortal;
 using GIBFramework.Models.Audit;
@@ -35,7 +38,10 @@ public sealed class GibPortalService(
     IEvidenceVault vault,
     IAuditTrail audit,
     ITenantContext context,
-    IClock clock)
+    IClock clock,
+    SqlConnectionFactory connections,
+    ReadinessCheck readiness,
+    IHostEnvironment host)
 {
     public const string ProviderReference = "GIB-EARSIV-PORTAL";
 
@@ -73,6 +79,11 @@ public sealed class GibPortalService(
         if (environment == GibPortalEnvironment.Production && !options.AllowProduction)
         {
             throw new ForbiddenOperationException("GIB_PORTAL_PRODUCTION_DISABLED", "Canlı GİB portal bağlantısı kapalı (GibPortal:AllowProduction=false). Yönetici açmadan yalnızca test portalı kullanılabilir.");
+        }
+        if (environment == GibPortalEnvironment.Production
+            && (host.IsDevelopment() || host.IsEnvironment("Demo") || !(await readiness.CheckAsync(ct)).Ready))
+        {
+            throw new ProviderUnavailableException("Canlı GİB portalı için üretim hazırlık denetimi tamamlanmalıdır.");
         }
 
         if (string.IsNullOrWhiteSpace(userCode) || string.IsNullOrEmpty(password))
@@ -131,6 +142,12 @@ public sealed class GibPortalService(
     public async Task<GibPortalDraftResult> CreateDraftAsync(Guid invoiceId, CancellationToken ct)
     {
         var (session, token) = RequireSession();
+        await using var invoiceLock = await connections.AcquireTenantLockAsync(session.TenantId, $"invoice-sign:{invoiceId:N}", ct);
+        if (session.Environment == GibPortalEnvironment.Test && !host.IsDevelopment() && !host.IsEnvironment("Demo"))
+        {
+            throw new ForbiddenOperationException("GIB_PORTAL_TEST_ISSUANCE_DISABLED", "Bu ortamda test portalı üzerinden yerel fatura düzenlenemez.");
+        }
+
         var invoice = await invoices.GetAsync(invoiceId, ct);
         if (invoice.Status != DocumentStatus.Approved)
         {
@@ -144,37 +161,54 @@ public sealed class GibPortalService(
         }
 
         var draft = GibPortalDraftMapper.Map(invoice);
-        var accountLock = sessions.AccountLock(session);
-        await accountLock.WaitAsync(ct);
-        GibPortalDocumentRow created;
-        try
+        await using var accountLock = await connections.AcquireTenantLockAsync(session.TenantId, $"portal-account:{session.Environment}:{session.PortalTaxId}", ct);
+        var day = invoice.IssueDate;
+        var stages = await vault.ListAsync(invoice.TenantId, invoice.Id, ct);
+        var latest = stages.LastOrDefault(stage => stage.Stage is "gib-portal-draft-requested" or "gib-portal-draft-deleted");
+        PortalDraftAttempt attempt;
+        if (latest is { Stage: "gib-portal-draft-requested" })
         {
-            var day = invoice.IssueDate;
-            var before = (await Call(session, () => client.ListDraftsAsync(session.Environment, token, day, day, ct))).Select(r => r.Ettn).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            await Call(session, () => client.CreateDraftAsync(session.Environment, token, draft, ct));
-
-            GibPortalDocumentRow? found = null;
-            for (var attempt = 0; attempt < 4 && found is null; attempt++)
+            var data = await vault.ReadAsync(invoice.TenantId, invoice.Id, latest.Sequence, "attempt.json", ct)
+                ?? throw new ConflictException("GIB_PORTAL_DRAFT_RECONCILIATION", "Önceki GİB taslak isteğinin kanıtı okunamadı.");
+            attempt = JsonDefaults.Deserialize<PortalDraftAttempt>(Encoding.UTF8.GetString(data));
+            if (attempt.Environment != session.Environment || attempt.TaxId != session.PortalTaxId)
             {
-                if (attempt > 0)
-                {
-                    await Task.Delay(TimeSpan.FromMilliseconds(750 * attempt), ct);
-                }
+                throw new ConflictException("GIB_PORTAL_DRAFT_RECONCILIATION", "Önceki GİB taslak isteğini aynı portal hesabı ve ortamda doğrulayın.");
+            }
+        }
+        else
+        {
+            var before = (await Call(session, () => client.ListDraftsAsync(session.Environment, token, day, day, ct))).Select(r => r.Ettn).ToArray();
+            attempt = new PortalDraftAttempt(session.Environment, session.PortalTaxId, before);
+            await vault.StoreAsync(invoice.TenantId, invoice.Id, day.Year, "gib-portal-draft-requested",
+                [new EvidenceItem("attempt.json", "application/json", JsonDefaults.SerializeToUtf8(attempt, indented: false))],
+                RetentionClass.SpecialIntegratorLog, ct);
+            await Call(session, () => client.CreateDraftAsync(session.Environment, token, draft, ct));
+        }
 
-                found = (await Call(session, () => client.ListDraftsAsync(session.Environment, token, day, day, ct)))
-                    .Where(r => !before.Contains(r.Ettn) && r.RecipientTaxId == invoice.Customer.TaxId && !r.IsApproved)
-                    .LastOrDefault();
+        var known = attempt.Before.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        GibPortalDocumentRow? created = null;
+        for (var poll = 0; poll < 4 && created is null; poll++)
+        {
+            if (poll > 0)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(750 * poll), ct);
             }
 
-            created = found ?? throw new GibPortalException(
-                "Taslak GİB portalında oluşturuldu ancak listede bulunamadı. Mükerrer oluşturmamak için portalda 'Düzenlenen Belgeler' ekranını kontrol edin.");
-        }
-        finally
-        {
-            accountLock.Release();
+            var matches = (await Call(session, () => client.ListDraftsAsync(session.Environment, token, day, day, ct)))
+                .Where(r => !known.Contains(r.Ettn) && r.RecipientTaxId == invoice.Customer.TaxId
+                    && (r.DocumentDate is null || r.DocumentDate == GibPortalClient.PortalDate(day))).Take(2).ToList();
+            if (matches.Count > 1)
+            {
+                throw new ConflictException("GIB_PORTAL_DRAFT_RECONCILIATION", "GİB portalında birden fazla taslak eşleşti. Kayıtları kontrol edin.");
+            }
+            created = matches.FirstOrDefault();
         }
 
-        var ettn = Guid.Parse(created.Ettn);
+        if (created is null || !Guid.TryParse(created.Ettn, out var ettn))
+        {
+            throw new ConflictException("GIB_PORTAL_DRAFT_RECONCILIATION", "GİB taslak isteği bekliyor. Düzenlenen Belgeler ekranını kontrol edin.");
+        }
         await vault.StoreAsync(invoice.TenantId, invoice.Id, invoice.IssueDate.Year, "gib-portal-draft",
             [
                 new EvidenceItem("portal-draft-request.json", "application/json", JsonDefaults.SerializeToUtf8(draft, indented: true)),
@@ -189,15 +223,20 @@ public sealed class GibPortalService(
     public async Task<GibPortalSmsResult> SendSmsAsync(Guid invoiceId, CancellationToken ct)
     {
         var (session, token) = RequireSession();
+        await using var invoiceLock = await connections.AcquireTenantLockAsync(session.TenantId, $"invoice-sign:{invoiceId:N}", ct);
         var invoice = await RequirePortalInvoiceAsync(invoiceId, session, ct);
         if (session.Environment == GibPortalEnvironment.Test)
         {
             throw new DomainException("GIB_PORTAL_TEST_NO_SMS", "Test portalı SMS göndermez; imza için kod girmeden 'İmzala' kullanın.");
         }
+        if (invoice.PortalSignatureRequested || invoice.PortalApprovalPending)
+        {
+            throw new ConflictException("GIB_PORTAL_RECONCILIATION", "Önceki imza işlemi için GİB durumunu doğrulayın.");
+        }
 
         var phone = await Call(session, () => client.GetPhoneAsync(session.Environment, token, ct));
         var oid = await Call(session, () => client.SendSmsAsync(session.Environment, token, phone, ct));
-        sessions.SavePendingSms(invoice.Id, oid);
+        sessions.SavePendingSms(session, invoice.Id, invoice.Uuid, oid);
         await AuditAsync("GIB_PORTAL_SMS_SENT", invoice.Id.ToString(), "Success", new { phone = MaskPhone(phone) }, null, ct);
         return new GibPortalSmsResult(MaskPhone(phone), 5);
     }
@@ -205,6 +244,7 @@ public sealed class GibPortalService(
     public async Task<Invoice> SignAsync(Guid invoiceId, string? smsCode, CancellationToken ct)
     {
         var (session, token) = RequireSession();
+        await using var invoiceLock = await connections.AcquireTenantLockAsync(session.TenantId, $"invoice-sign:{invoiceId:N}", ct);
         var invoice = await RequirePortalInvoiceAsync(invoiceId, session, ct);
         var ettn = invoice.Uuid.ToString("D");
         var row = await FindRowAsync(session, token, invoice, ettn, ct)
@@ -212,6 +252,10 @@ public sealed class GibPortalService(
 
         if (!row.IsApproved)
         {
+            if (invoice.PortalSignatureRequested || invoice.PortalApprovalPending)
+            {
+                throw new ConflictException("GIB_PORTAL_RECONCILIATION", "Önceki imzanın sonucu GİB portalında henüz doğrulanamadı.");
+            }
             if (session.Environment == GibPortalEnvironment.Production)
             {
                 if (smsCode is not { Length: 6 } || !smsCode.All(char.IsAsciiDigit))
@@ -219,16 +263,21 @@ public sealed class GibPortalService(
                     throw new ValidationFailedException("GIB_PORTAL_SMS_CODE", "6 haneli SMS onay kodu gereklidir.", []);
                 }
 
-                var oid = sessions.TakePendingSms(invoice.Id)
+                var oid = sessions.GetPendingSms(session, invoice.Id, invoice.Uuid)
                     ?? throw new DomainException("GIB_PORTAL_SMS_EXPIRED", "SMS kodu isteği bulunamadı veya süresi doldu; yeniden kod isteyin.");
+                await invoices.SetPortalSignatureRequestedAsync(invoice.Id, requested: true, ct);
                 if (!await Call(session, () => client.VerifySmsAndSignAsync(session.Environment, token, smsCode, oid, [row], ct)))
                 {
-                    await AuditAsync("GIB_PORTAL_SIGN_FAILED", invoice.Id.ToString(), "Failure", null, "SMS kodu doğrulanamadı", ct);
+                    using var rejectionDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                    await invoices.SetPortalSignatureRequestedAsync(invoice.Id, requested: false, rejectionDeadline.Token);
                     throw new ValidationFailedException("GIB_PORTAL_SMS_INVALID", "SMS onay kodu GİB tarafından kabul edilmedi.", []);
                 }
+
+                sessions.RemovePendingSms(session, invoice.Id, invoice.Uuid);
             }
             else
             {
+                await invoices.SetPortalSignatureRequestedAsync(invoice.Id, requested: true, ct);
                 await Call(session, () => client.SignWithHsmAsync(session.Environment, token, [row], ct));
             }
 
@@ -239,8 +288,12 @@ public sealed class GibPortalService(
             }
         }
 
+        using (var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15)))
+        {
+            await invoices.MarkPortalApprovalAsync(invoice.Id, row.DocumentNumber, deadline.Token);
+        }
+
         var zip = await Call(session, () => client.DownloadZipAsync(session.Environment, token, ettn, ct));
-        var (xml, html) = ExtractZip(zip);
         var items = new List<EvidenceItem>
         {
             new("gib-portal.zip", "application/zip", zip),
@@ -249,23 +302,50 @@ public sealed class GibPortalService(
 
         string? signedSha = null;
         SignatureVerification? signature = null;
-        IReadOnlyList<UblIssue> ublIssues = [];
+        var ublIssues = new List<UblIssue>();
+        byte[]? xml = null, html = null;
+        try
+        {
+            (xml, html) = ExtractZip(zip);
+            if (xml is not null)
+            {
+                var doc = UblInvoiceReader.LoadSecure(new MemoryStream(xml));
+                signature = signer.Verify(doc, requireTrustedCertificate: session.Environment == GibPortalEnvironment.Production);
+                ublIssues.AddRange(validator.Validate(doc, requireSignature: true));
+                var summary = UblInvoiceReader.Read(doc);
+                if (!Guid.TryParse(summary.Uuid, out var signedEttn) || signedEttn != invoice.Uuid
+                    || string.IsNullOrWhiteSpace(row.DocumentNumber) || summary.Id != row.DocumentNumber
+                    || summary.Supplier.TaxId != invoice.Supplier.TaxId || summary.Customer.TaxId != invoice.Customer.TaxId
+                    || summary.Currency != invoice.Currency || summary.PayableAmount != invoice.Totals.PayableAmount)
+                {
+                    ublIssues.Add(new UblIssue("GIB_PORTAL_IDENTITY", FindingSeverity.Error, "İmzalı belgenin kimliği veya tutarı beklenen faturayla uyuşmuyor."));
+                }
+            }
+        }
+        catch (Exception ex) when (ex is InvalidDataException or XmlException or XmlSchemaException or DomainException)
+        {
+            ublIssues.Add(new UblIssue("GIB_PORTAL_EVIDENCE", FindingSeverity.Error, "Portal arşivi veya imzalı XML doğrulanamadı."));
+        }
+
+        var valid = xml is not null && signature?.IsValid == true && ublIssues.All(i => i.Severity != FindingSeverity.Error);
+        var canComplete = !string.IsNullOrWhiteSpace(row.DocumentNumber)
+            && (session.Environment != GibPortalEnvironment.Production || valid);
         if (xml is not null)
         {
             signedSha = Hashing.Sha256Hex(xml);
-            var doc = UblInvoiceReader.LoadSecure(new MemoryStream(xml));
-            signature = signer.Verify(doc);
-            ublIssues = validator.Validate(doc, requireSignature: true);
-            items.Add(new EvidenceItem("signed.xml", "application/xml", xml));
+            items.Add(new EvidenceItem(canComplete ? "signed.xml" : "unverified.xml", "application/xml", xml));
         }
-
-        if (html is not null)
+        if (html is not null && canComplete)
         {
             items.Add(new EvidenceItem("invoice.html", "text/html", html));
         }
 
         items.Add(new EvidenceItem("verification.json", "application/json", JsonDefaults.SerializeToUtf8(new { signature, ublIssues, environment = session.Environment }, indented: true)));
-        var manifest = await vault.StoreAsync(invoice.TenantId, invoice.Id, invoice.IssueDate.Year, "signed", items, RetentionClass.VukDocument, ct);
+        var manifest = await vault.StoreAsync(invoice.TenantId, invoice.Id, invoice.IssueDate.Year, canComplete ? "signed" : "portal-reconciliation", items, RetentionClass.VukDocument, ct);
+        if (!canComplete)
+        {
+            throw new DomainException("GIB_PORTAL_EVIDENCE_INVALID", "GİB onayı alındı. İmzalı belge doğrulanamadı; mutabakat gerekiyor.");
+        }
 
         return await invoices.CompleteExternalIssuanceAsync(
             invoice.Id,
@@ -273,6 +353,7 @@ public sealed class GibPortalService(
             signedSha,
             signature?.SignerSubject,
             $"{ProviderReference}:{session.Environment}",
+            valid && session.Environment == GibPortalEnvironment.Production,
             new { session.Environment, row.DocumentNumber, ettn, manifest.ManifestHash, signatureValid = signature?.IsValid, ublErrors = ublIssues.Count(i => i.Severity == FindingSeverity.Error) },
             ct);
     }
@@ -337,6 +418,7 @@ public sealed class GibPortalService(
     public async Task<Invoice> DeleteDraftAsync(Guid invoiceId, string reason, CancellationToken ct)
     {
         var (session, token) = RequireSession();
+        await using var invoiceLock = await connections.AcquireTenantLockAsync(session.TenantId, $"invoice-sign:{invoiceId:N}", ct);
         var invoice = await RequirePortalInvoiceAsync(invoiceId, session, ct);
         var row = await FindRowAsync(session, token, invoice, invoice.Uuid.ToString("D"), ct);
         if (row is { IsApproved: true })
@@ -349,6 +431,9 @@ public sealed class GibPortalService(
             await Call(session, () => client.DeleteDraftsAsync(session.Environment, token, [row], reason, ct));
         }
 
+        await vault.StoreAsync(invoice.TenantId, invoice.Id, invoice.IssueDate.Year, "gib-portal-draft-deleted",
+            [new EvidenceItem("deletion.json", "application/json", JsonDefaults.SerializeToUtf8(new { invoice.Uuid, reason }, indented: false))],
+            RetentionClass.SpecialIntegratorLog, ct);
         return await invoices.AbortExternalIssuanceAsync(invoice.Id, "GİB portal taslağı silindi: " + reason, ct);
     }
 
@@ -394,6 +479,11 @@ public sealed class GibPortalService(
         if (invoice.PortalEnvironment != session.Environment)
         {
             throw new DomainException("GIB_PORTAL_ENVIRONMENT", $"Taslak {invoice.PortalEnvironment} ortamında; şu anki oturum {session.Environment}.");
+        }
+
+        if (session.Environment == GibPortalEnvironment.Test && !host.IsDevelopment() && !host.IsEnvironment("Demo"))
+        {
+            throw new ForbiddenOperationException("GIB_PORTAL_TEST_ISSUANCE_DISABLED", "Bu ortamda test portalı üzerinden yerel fatura düzenlenemez.");
         }
 
         return invoice;
@@ -471,4 +561,6 @@ public sealed class GibPortalService(
         var digits = new string(phone.Where(char.IsAsciiDigit).ToArray());
         return digits.Length < 4 ? "****" : new string('*', digits.Length - 4) + digits[^4..];
     }
+
+    private sealed record PortalDraftAttempt(GibPortalEnvironment Environment, string TaxId, string[] Before);
 }

@@ -40,8 +40,9 @@ export const MFA_REQUIRED_EVENT = 'gibframework:mfa-required';
 async function request(method, path, { body, headers = {}, raw, responseType = 'json' } = {}) {
   const h = { ...headers };
   const token = storage.token;
+  const tenant = storage.tenantOverride;
   if (token) h.Authorization = `Bearer ${token}`;
-  if (storage.tenantOverride) h['X-Tenant-Id'] = storage.tenantOverride;
+  if (tenant) h['X-Tenant-Id'] = tenant;
 
   let payload;
   if (raw !== undefined) {
@@ -59,16 +60,20 @@ async function request(method, path, { body, headers = {}, raw, responseType = '
   }
 
   if (response.status === 401 && token && !path.startsWith('/api/v1/auth/login')) {
-    storage.clear();
-    window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    if (storage.token === token) {
+      storage.clear();
+      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    }
     throw new ApiError(401, 'UNAUTHORIZED', 'Oturumunuz sona erdi; lütfen yeniden giriş yapın.');
   }
 
   if (!response.ok) {
     let problem = {};
     try { problem = await response.json(); } catch { }
-    if (problem.code === 'PASSWORD_CHANGE_REQUIRED') window.dispatchEvent(new Event(PASSWORD_CHANGE_EVENT));
-    if (problem.code === 'MFA_REQUIRED') window.dispatchEvent(new Event(MFA_REQUIRED_EVENT));
+    if (token && storage.token === token && storage.tenantOverride === tenant) {
+      if (problem.code === 'PASSWORD_CHANGE_REQUIRED') window.dispatchEvent(new Event(PASSWORD_CHANGE_EVENT));
+      if (problem.code === 'MFA_REQUIRED') window.dispatchEvent(new Event(MFA_REQUIRED_EVENT));
+    }
     const details = problem.details || (problem.errors ? Object.values(problem.errors).flat() : []);
     throw new ApiError(response.status, problem.code || `HTTP_${response.status}`, problem.title || response.statusText, details);
   }
@@ -82,8 +87,12 @@ async function request(method, path, { body, headers = {}, raw, responseType = '
 
 function fileName(response) {
   const cd = response.headers.get('Content-Disposition') || '';
-  const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(cd);
-  return m ? decodeURIComponent(m[1]) : null;
+  const encoded = /(?:^|;)\s*filename\*\s*=\s*UTF-8'[^']*'([^;]+)/i.exec(cd);
+  if (encoded) {
+    try { return decodeURIComponent(encoded[1].trim()); } catch { }
+  }
+  const plain = /(?:^|;)\s*filename\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^;]+))/i.exec(cd);
+  return plain ? (plain[1]?.replace(/\\(.)/g, '$1') ?? plain[2].trim()) : null;
 }
 
 export const api = {

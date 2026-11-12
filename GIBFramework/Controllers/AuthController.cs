@@ -28,7 +28,7 @@ public sealed class AuthController(AuthService auth) : ControllerBase
     }
 
     [HttpGet("me")]
-    [Authorize]
+    [Authorize(AuthenticationSchemes = "Bearer")]
     public async Task<IActionResult> Me(CancellationToken ct) => Ok(await auth.MeAsync(ct));
 
     [HttpGet("permissions")]
@@ -38,6 +38,8 @@ public sealed class AuthController(AuthService auth) : ControllerBase
         [FromServices] IAuthorizationService authorization,
         [FromServices] ITenantContext tenant,
         [FromServices] WorkflowOptions workflow,
+        [FromServices] Infrastructure.Providers.ProviderRegistry providers,
+        [FromServices] GibPortalOptions portal,
         [FromServices] SecurityPolicyService securityPolicies)
     {
         var granted = new List<string>();
@@ -63,11 +65,13 @@ public sealed class AuthController(AuthService auth) : ControllerBase
             workflow.RequireMakerChecker,
             [.. workflow.SelfApprovalRoles.Distinct(StringComparer.Ordinal)],
             await Middleware.PasswordChangeMiddleware.MfaMissingAsync(HttpContext, securityPolicies),
-            idle));
+            idle,
+            providers.IntegratorAvailable,
+            portal.Enabled));
     }
 
     [HttpPost("change-password")]
-    [Authorize]
+    [Authorize(AuthenticationSchemes = "Bearer")]
     public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest request, CancellationToken ct)
     {
         await auth.ChangePasswordAsync(request.CurrentPassword, request.NewPassword, ct);
@@ -75,7 +79,7 @@ public sealed class AuthController(AuthService auth) : ControllerBase
     }
 
     [HttpPost("logout")]
-    [Authorize]
+    [Authorize(AuthenticationSchemes = "Bearer")]
     public async Task<IActionResult> Logout(CancellationToken ct)
     {
         await auth.LogoutEverywhereAsync(ct);
@@ -83,7 +87,7 @@ public sealed class AuthController(AuthService auth) : ControllerBase
     }
 
     [HttpPost("totp/setup")]
-    [Authorize]
+    [Authorize(AuthenticationSchemes = "Bearer")]
     public async Task<IActionResult> TotpSetup(CancellationToken ct)
     {
         var setup = await auth.BeginTotpSetupAsync(ct);
@@ -91,7 +95,7 @@ public sealed class AuthController(AuthService auth) : ControllerBase
     }
 
     [HttpPost("totp/enable")]
-    [Authorize]
+    [Authorize(AuthenticationSchemes = "Bearer")]
     public async Task<IActionResult> TotpEnable([FromBody] TotpCodeRequest request, CancellationToken ct)
     {
         await auth.EnableTotpAsync(request.Code, ct);
@@ -108,11 +112,11 @@ public sealed class AuthController(AuthService auth) : ControllerBase
 
 [ApiController]
 [Route("api/v1/users")]
-[Authorize(Policy = Policies.UserManage)]
+[Authorize(Policy = Policies.UserManage, AuthenticationSchemes = "Bearer")]
 public sealed class UsersController(UserAdminService users) : ControllerBase
 {
     [HttpGet]
-    public async Task<IActionResult> List(CancellationToken ct) => Ok(await users.ListAsync(ct));
+    public async Task<IActionResult> List([FromQuery] Guid? tenantId, CancellationToken ct) => Ok(await users.ListAsync(tenantId, ct));
 
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateUserRequest request, CancellationToken ct)

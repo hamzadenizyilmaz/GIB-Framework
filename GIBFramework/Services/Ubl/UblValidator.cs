@@ -1,6 +1,8 @@
 using System.Text.RegularExpressions;
+using System.Security.Cryptography;
 using System.Xml;
 using System.Xml.Schema;
+using System.Xml.Xsl;
 
 namespace GIBFramework.Services.Ubl;
 
@@ -11,8 +13,12 @@ public sealed partial class UblValidator(UblOptions options, IHostEnvironment en
     private static readonly string[] Profiles = ["TEMELFATURA", "TICARIFATURA", "EARSIVFATURA", "IHRACAT", "YOLCUBERABERFATURA", "KAMU"];
     private static readonly string[] TypeCodes = ["SATIS", "IADE", "TEVKIFAT", "ISTISNA", "OZELMATRAH", "IHRACKAYITLI"];
     private readonly Lazy<XmlSchemaSet?> _schemas = new(() => LoadSchemas(options, environment));
+    private readonly Lazy<XslCompiledTransform?> _schematron = new(() => LoadSchematron(options, environment));
 
     public bool SchemaValidationAvailable => _schemas.Value is not null;
+    public bool ProductionValidationAvailable => options.RequireSchemaValidation
+        && !string.IsNullOrWhiteSpace(options.SchemaVersion) && IsSha256(options.SchemaSha256)
+        && SchemaValidationAvailable && _schematron.Value is not null;
 
     public IReadOnlyList<UblIssue> Validate(XmlDocument document, bool requireSignature)
     {
@@ -70,6 +76,27 @@ public sealed partial class UblValidator(UblOptions options, IHostEnvironment en
             {
                 CheckSignatureStructure(document, issues);
             }
+        }
+
+        if (_schematron.Value is { } schematron)
+        {
+            using var report = new MemoryStream();
+            schematron.Transform(document, null, report);
+            report.Position = 0;
+            var result = UblInvoiceReader.LoadSecure(report);
+            const string svrl = "http://purl.oclc.org/dsdl/svrl";
+            if (result.DocumentElement is not { LocalName: "schematron-output", NamespaceURI: svrl })
+            {
+                issues.Add(new UblIssue("UBL-SCHEMATRON-OUTPUT", FindingSeverity.Error, "Şematron çıktısı SVRL biçiminde değil."));
+            }
+            foreach (XmlElement assertion in result.GetElementsByTagName("failed-assert", svrl))
+            {
+                issues.Add(new UblIssue("UBL-SCHEMATRON", FindingSeverity.Error, assertion.InnerText.Trim()));
+            }
+        }
+        else if (options.RequireSchemaValidation && !environment.IsDevelopment() && !environment.IsEnvironment("Demo"))
+        {
+            issues.Add(new UblIssue("UBL-SCHEMATRON-NOT-CONFIGURED", FindingSeverity.Error, "Üretim şematron paketi yapılandırılmadı."));
         }
 
         return issues;
@@ -146,11 +173,75 @@ public sealed partial class UblValidator(UblOptions options, IHostEnvironment en
             return null;
         }
 
-        var set = new XmlSchemaSet { XmlResolver = new XmlUrlResolver() };
-        using var reader = XmlReader.Create(main, new XmlReaderSettings { DtdProcessing = DtdProcessing.Parse, XmlResolver = new XmlUrlResolver() });
+        var schemaHashConfigured = !string.IsNullOrWhiteSpace(options.SchemaSha256);
+        if (schemaHashConfigured)
+        {
+            var files = Directory.GetFiles(dir, "*.xsd", SearchOption.AllDirectories)
+                .OrderBy(path => Path.GetRelativePath(dir, path).Replace('\\', '/'), StringComparer.Ordinal);
+            var manifest = string.Join("\n", files.Select(path =>
+                Path.GetRelativePath(dir, path).Replace('\\', '/') + ":" + Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)))));
+            CheckHash(System.Text.Encoding.UTF8.GetBytes(manifest), options.SchemaSha256);
+        }
+
+        var set = new XmlSchemaSet { XmlResolver = new LocalSchemaResolver(dir) };
+        if (schemaHashConfigured
+            && Directory.EnumerateFiles(dir, "UBL-xmldsig-core-schema-2.1.xsd", SearchOption.AllDirectories).SingleOrDefault() is { } signatureSchema)
+        {
+            // UBL-TR imza şemasının iç DTD'si yalnızca özeti doğrulanmış paketten okunur.
+            using var signatureReader = XmlReader.Create(signatureSchema, new XmlReaderSettings
+            {
+                DtdProcessing = DtdProcessing.Parse,
+                XmlResolver = null,
+                MaxCharactersFromEntities = 4096,
+            });
+            set.Add(null, signatureReader);
+        }
+
+        using var reader = XmlReader.Create(main, new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null });
         set.Add(null, reader);
         set.Compile();
         return set;
+    }
+
+    private static XslCompiledTransform? LoadSchematron(UblOptions options, IHostEnvironment environment)
+    {
+        if (string.IsNullOrWhiteSpace(options.SchematronPath))
+        {
+            return null;
+        }
+
+        var bytes = File.ReadAllBytes(Path.GetFullPath(options.SchematronPath, environment.ContentRootPath));
+        CheckHash(bytes, options.SchematronSha256);
+        using var reader = XmlReader.Create(new MemoryStream(bytes), new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null });
+        var stylesheet = new XslCompiledTransform();
+        stylesheet.Load(reader, XsltSettings.Default, null);
+        return stylesheet;
+    }
+
+    private static bool IsSha256(string hash) => hash.Length == 64 && hash.All(Uri.IsHexDigit);
+
+    private static void CheckHash(byte[] bytes, string expected)
+    {
+        if (!IsSha256(expected) || !Convert.ToHexString(SHA256.HashData(bytes)).Equals(expected, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("UBL doğrulama paketinin SHA-256 özeti yapılandırmayla uyuşmuyor.");
+        }
+    }
+
+    private sealed class LocalSchemaResolver(string directory) : XmlUrlResolver
+    {
+        public override object GetEntity(Uri absoluteUri, string? role, Type? ofObjectToReturn)
+        {
+            var relative = absoluteUri.IsFile && !absoluteUri.IsUnc
+                ? Path.GetRelativePath(directory, absoluteUri.LocalPath) : "..";
+            if (Path.IsPathRooted(relative) || relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                || !relative.EndsWith(".xsd", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new XmlException("UBL şema referansı yapılandırılmış XSD dizininin dışında.");
+            }
+
+            return File.OpenRead(absoluteUri.LocalPath);
+        }
     }
 
     [GeneratedRegex("^[A-Z0-9]{3}[0-9]{4}[0-9]{9}$")]

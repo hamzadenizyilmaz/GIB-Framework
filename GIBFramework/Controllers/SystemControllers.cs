@@ -62,9 +62,13 @@ public sealed class SystemController(
     JwtOptions jwt,
     GibPortalOptions portal,
     IConfiguration configuration,
+    ReadinessCheck readiness,
     IClock clock) : ControllerBase
 {
     private static readonly DateTimeOffset StartedAt = new(Process.GetCurrentProcess().StartTime.ToUniversalTime(), TimeSpan.Zero);
+
+    [HttpGet("readiness")]
+    public Task<ReadinessResult> Readiness(CancellationToken ct) => readiness.CheckAsync(ct);
 
     [HttpGet("status")]
     public async Task<IActionResult> Status(CancellationToken ct)
@@ -138,6 +142,7 @@ public sealed class SystemController(
                 memoryMb = Process.GetCurrentProcess().WorkingSet64 / 1024 / 1024,
             },
             database = new { name, version, edition, schemaVersion = schema, requiredSchemaVersion = SchemaVerifier.RequiredVersion },
+            readiness = await readiness.CheckAsync(ct),
             totals,
             scope = tenantId is null ? "platform" : "tenant",
             security = new

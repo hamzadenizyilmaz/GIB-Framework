@@ -106,6 +106,12 @@ public sealed class ProviderRegistry
             throw new InvalidOperationException("SpecialIntegratorMode GİB özel entegratör izni olmadan açılamaz.");
         }
 
+        if (options.PortalOnly || !_providers.ContainsKey("Sandbox"))
+        {
+            Active = _providers["GibDirect"];
+            return;
+        }
+
         if (string.Equals(options.Active, "GibDirect", StringComparison.OrdinalIgnoreCase) && !options.GibDirectEnabled)
         {
             throw new InvalidOperationException("GibDirect sağlayıcısı GibDirectEnabled=false iken seçilemez.");
@@ -117,6 +123,15 @@ public sealed class ProviderRegistry
     }
 
     public IEDocumentProvider Active { get; }
+    public bool IntegratorAvailable => Active is not GibDirectProvider;
+
+    public void RequireIntegrator()
+    {
+        if (!IntegratorAvailable)
+        {
+            throw new ProviderUnavailableException("Bu ortamda yerel entegratör imzası ve iletimi kapalıdır.");
+        }
+    }
 
     public IReadOnlyCollection<string> Names => _providers.Keys;
 }

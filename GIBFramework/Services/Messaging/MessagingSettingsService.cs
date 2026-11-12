@@ -70,6 +70,7 @@ public sealed class MessagingSettingsService(
     ITenantSettingsRepository settings,
     IDataProtectionProvider dataProtection,
     MessagingOptions options,
+    Infrastructure.OutboundNetwork network,
     IAuditTrail audit,
     ITenantContext context,
     IClock clock)
@@ -106,6 +107,15 @@ public sealed class MessagingSettingsService(
         if (request.Enabled && host.Length == 0)
         {
             errors.Add("SMTP sunucusu zorunludur.");
+        }
+        else if (request.Enabled && !network.AllowsSmtp(host))
+        {
+            errors.Add("SMTP sunucusu izin verilen hedefler arasında değil.");
+        }
+
+        if (request.Enabled && !string.IsNullOrWhiteSpace(request.UserName) && request.Security == SmtpSecurity.None)
+        {
+            errors.Add("SMTP kimlik doğrulaması için STARTTLS veya SSL gereklidir.");
         }
 
         if (request.Enabled && !IsEmail(from))
@@ -279,7 +289,7 @@ public sealed class MessagingSettingsService(
         if (m.Smtp.Enabled && !string.IsNullOrWhiteSpace(m.Smtp.Host) && IsEmail(m.Smtp.FromAddress))
         {
             return new SmtpEndpoint(m.Smtp.Host, m.Smtp.Port, m.Smtp.Security, m.Smtp.UserName, Unprotect(m.Smtp.PasswordProtected),
-                m.Smtp.FromAddress, m.Smtp.FromName, m.Smtp.ReplyTo);
+                m.Smtp.FromAddress, m.Smtp.FromName, m.Smtp.ReplyTo, TenantConfigured: true);
         }
 
         if (!PlatformSmtpAvailable)

@@ -108,6 +108,7 @@ public sealed class SigningOptions
     public string StoreLocation { get; set; } = "LocalMachine";
 
     public int[] ExpiryAlertDays { get; set; } = [90, 60, 30, 15, 7, 1];
+    public string[] TrustedRootSha256 { get; set; } = [];
 }
 
 public sealed class EvidenceVaultOptions
@@ -122,6 +123,8 @@ public sealed class ProviderOptions
     public const string Section = "Providers";
 
     public string Active { get; set; } = "Sandbox";
+
+    public bool PortalOnly { get; set; }
 
     public bool GibDirectEnabled { get; set; }
 
@@ -139,6 +142,10 @@ public sealed class UblOptions
     public string SchemaDirectory { get; set; } = string.Empty;
 
     public bool RequireSchemaValidation { get; set; }
+    public string SchemaVersion { get; set; } = string.Empty;
+    public string SchemaSha256 { get; set; } = string.Empty;
+    public string SchematronPath { get; set; } = string.Empty;
+    public string SchematronSha256 { get; set; } = string.Empty;
 }
 
 public sealed class WorkerOptions
@@ -233,4 +240,11 @@ public sealed class MarketplaceOptions
     public string N11RestUrl { get; set; } = "https://api.n11.com/rest";
 
     public string N11InvoiceSoapUrl { get; set; } = "https://api.n11.com/ws/sellerInvoiceService/";
+}
+
+public sealed class OutboundNetworkOptions
+{
+    public const string Section = "OutboundNetwork";
+    public string[] WebhookHosts { get; set; } = [];
+    public string[] SmtpHosts { get; set; } = [];
 }

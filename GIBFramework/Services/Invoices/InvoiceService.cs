@@ -220,13 +220,19 @@ public sealed partial class InvoiceService(
 
     public async Task<Invoice> SignAsync(Guid id, CancellationToken ct)
     {
+        providers.RequireIntegrator();
         var (tenantId, actor) = Who();
+        await using var signingLock = await connections.AcquireTenantLockAsync(tenantId, $"invoice-sign:{id:N}", ct);
         Invoice invoice;
 
         await using (var conn = await connections.OpenForTenantAsync(tenantId, ct))
         {
             var scope = await connections.BeginAsync(conn, ct);
             invoice = await LoadForUpdateAsync(scope, tenantId, id, ct);
+            if (invoice.Status == DocumentStatus.Signing && invoice.IssuanceChannel == IssuanceChannel.Integrator)
+            {
+                await TransitionAsync(scope, invoice, DocumentStatus.Approved, actor, "Kesilen yerel imza işlemi yeniden başlatıldı.", ct);
+            }
             Require(invoice, DocumentStatus.Approved);
             if (invoice.DocumentNumber is null)
             {
@@ -303,17 +309,18 @@ public sealed partial class InvoiceService(
             await scope.Transaction.CommitAsync(ct);
             return invoice;
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex)
         {
-            await using var conn = await connections.OpenForTenantAsync(tenantId, CancellationToken.None);
-            var scope = await connections.BeginAsync(conn, CancellationToken.None);
-            var current = await LoadForUpdateAsync(scope, tenantId, id, CancellationToken.None);
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            await using var conn = await connections.OpenForTenantAsync(tenantId, deadline.Token);
+            var scope = await connections.BeginAsync(conn, deadline.Token);
+            var current = await LoadForUpdateAsync(scope, tenantId, id, deadline.Token);
             if (current.Status == DocumentStatus.Signing)
             {
                 current.LastError = ex.Message;
-                await TransitionAsync(scope, current, DocumentStatus.Approved, actor, "İmza başarısız", CancellationToken.None);
-                await AuditAsync(scope, tenantId, actor, "INVOICE_SIGN_FAILED", current, null, CancellationToken.None, "Failure", ex.Message);
-                await scope.Transaction.CommitAsync(CancellationToken.None);
+                await TransitionAsync(scope, current, DocumentStatus.Approved, actor, "İmza başarısız", deadline.Token);
+                await AuditAsync(scope, tenantId, actor, "INVOICE_SIGN_FAILED", current, null, deadline.Token, "Failure", ex.Message);
+                await scope.Transaction.CommitAsync(deadline.Token);
             }
 
             throw;
@@ -328,6 +335,7 @@ public sealed partial class InvoiceService(
 
     public async Task<Invoice> TransmitAsync(Guid tenantId, Guid id, Actor actor, CancellationToken ct)
     {
+        providers.RequireIntegrator();
         ArgumentNullException.ThrowIfNull(actor);
         Invoice invoice;
 
@@ -527,6 +535,8 @@ public sealed partial class InvoiceService(
         Require(invoice, DocumentStatus.Approved);
         invoice.IssuanceChannel = channel;
         invoice.PortalEnvironment = environment;
+        invoice.PortalSignatureRequested = false;
+        invoice.PortalApprovalPending = false;
         invoice.Uuid = externalEttn;
         invoice.LastError = null;
         await TransitionAsync(scope, invoice, DocumentStatus.Signing, actor, note, ct);
@@ -543,13 +553,54 @@ public sealed partial class InvoiceService(
         var invoice = await LoadForUpdateAsync(scope, tenantId, id, ct);
         Require(invoice, DocumentStatus.Signing);
         invoice.LastError = reason;
+        invoice.IssuanceChannel = IssuanceChannel.Integrator;
+        invoice.PortalEnvironment = null;
+        invoice.PortalSignatureRequested = false;
+        invoice.PortalApprovalPending = false;
         await TransitionAsync(scope, invoice, DocumentStatus.Approved, actor, reason, ct);
         await AuditAsync(scope, tenantId, actor, "INVOICE_EXTERNAL_DRAFT_ABORTED", invoice, new { reason }, ct);
         await scope.Transaction.CommitAsync(ct);
         return invoice;
     }
 
-    public async Task<Invoice> CompleteExternalIssuanceAsync(Guid id, string documentNumber, string? signedXmlSha256, string? signerSubject, string providerReference, object? auditData, CancellationToken ct)
+    public async Task MarkPortalApprovalAsync(Guid id, string? documentNumber, CancellationToken ct)
+    {
+        var (tenantId, actor) = Who();
+        await using var conn = await connections.OpenForTenantAsync(tenantId, ct);
+        var scope = await connections.BeginAsync(conn, ct);
+        var invoice = await LoadForUpdateAsync(scope, tenantId, id, ct);
+        Require(invoice, DocumentStatus.Signing);
+        if (invoice.PortalApprovalPending)
+        {
+            return;
+        }
+
+        invoice.LastError = "GİB onayı alındı. İmzalı belge doğrulanarak mutabakat tamamlanmalı.";
+        invoice.PortalApprovalPending = true;
+        invoice.PortalSignatureRequested = false;
+        invoice.UpdatedAt = clock.UtcNow;
+        await invoices.UpdateAsync(invoice, scope, ct);
+        await AuditAsync(scope, tenantId, actor, "INVOICE_PORTAL_APPROVAL_PENDING", invoice, new { invoice.Uuid, documentNumber }, ct);
+        await scope.Transaction.CommitAsync(ct);
+    }
+
+    public async Task SetPortalSignatureRequestedAsync(Guid id, bool requested, CancellationToken ct)
+    {
+        var (tenantId, actor) = Who();
+        await using var conn = await connections.OpenForTenantAsync(tenantId, ct);
+        var scope = await connections.BeginAsync(conn, ct);
+        var invoice = await LoadForUpdateAsync(scope, tenantId, id, ct);
+        Require(invoice, DocumentStatus.Signing);
+        invoice.PortalSignatureRequested = requested;
+        invoice.LastError = requested ? "GİB imza isteğinin sonucu kontrol edilmeli." : null;
+        invoice.UpdatedAt = clock.UtcNow;
+        await invoices.UpdateAsync(invoice, scope, ct);
+        await AuditAsync(scope, tenantId, actor, requested ? "INVOICE_PORTAL_SIGN_REQUESTED" : "INVOICE_PORTAL_SIGN_REJECTED",
+            invoice, new { invoice.Uuid }, ct);
+        await scope.Transaction.CommitAsync(ct);
+    }
+
+    public async Task<Invoice> CompleteExternalIssuanceAsync(Guid id, string documentNumber, string? signedXmlSha256, string? signerSubject, string providerReference, bool evidenceVerified, object? auditData, CancellationToken ct)
     {
         var (tenantId, actor) = Who();
         await using var conn = await connections.OpenForTenantAsync(tenantId, ct);
@@ -568,6 +619,9 @@ public sealed partial class InvoiceService(
         invoice.SignedAt = now;
         invoice.TransmittedAt = now;
         invoice.ProviderReference = providerReference;
+        invoice.PortalEvidenceVerified = evidenceVerified;
+        invoice.PortalApprovalPending = false;
+        invoice.PortalSignatureRequested = false;
         invoice.LastError = null;
         var note = $"{providerReference}: {documentNumber}";
         await TransitionAsync(scope, invoice, DocumentStatus.Signed, actor, signerSubject ?? note, ct);
@@ -698,6 +752,15 @@ public sealed partial class InvoiceService(
         var tenantId = context.RequireTenant();
         await using var conn = await connections.OpenForTenantAsync(tenantId, ct);
         return await invoices.ListAsync(conn, tenantId, query, ct);
+    }
+
+    public async Task<IReadOnlyList<InvoiceOverviewRow>> OverviewAsync(CancellationToken ct)
+    {
+        var tenantId = context.RequireTenant();
+        var today = clock.TurkeyToday;
+        var from = new DateOnly(today.Year, today.Month, 1).AddMonths(-5);
+        await using var conn = await connections.OpenForTenantAsync(tenantId, ct);
+        return await invoices.OverviewAsync(conn, tenantId, from, today, ct);
     }
 
     public async Task<(IReadOnlyList<InvoiceHistoryEntry> History, IReadOnlyList<InvoiceAction> Actions)> GetHistoryAsync(Guid id, CancellationToken ct)

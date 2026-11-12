@@ -1,7 +1,4 @@
 {
-  // Vergi kodları, KDV oranları, tevkifat ve istisna tanımları (tarihli). Kod içinde oran tutulmaz.
-  // DURUM: PendingExpertReview — oranlar, tevkifat kodları/oranları ve istisna kodları GİB kod listesi
-  // ve ilgili KDV Genel Uygulama Tebliği metninden SMMM/YMM tarafından teyit edilmelidir.
   "reviewStatus": "PendingExpertReview",
   "reviewNotes": "KDV oranları 10.07.2023 itibarıyla %1/%10/%20 olarak tanımlandı. Tevkifat kodları/oranları ve istisna kodları GİB güncel kod listesinden teyit edilecek.",
   "vatRates": [

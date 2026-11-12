@@ -37,7 +37,7 @@ public sealed class ApiKeyRepository(SqlConnectionFactory connections)
 {
     public async Task InsertAsync(ApiKeyInfo key, string hash, CancellationToken ct)
     {
-        await using var c = await connections.OpenSystemAsync(ct);
+        await using var c = await connections.OpenForTenantAsync(key.TenantId, ct);
         await using var cmd = c.Command("""
             INSERT dbo.ApiKeys (Id, TenantId, Name, Prefix, KeyHash, RolesJson, CreatedBy, CreatedAt, ExpiresAt)
             VALUES (@id, @t, @n, @p, @h, @r, @by, @at, @exp)
@@ -49,7 +49,7 @@ public sealed class ApiKeyRepository(SqlConnectionFactory connections)
 
     public async Task<IReadOnlyList<ApiKeyInfo>> ListAsync(Guid tenantId, CancellationToken ct)
     {
-        await using var c = await connections.OpenSystemAsync(ct);
+        await using var c = await connections.OpenForTenantAsync(tenantId, ct);
         await using var cmd = c.Command("SELECT * FROM dbo.ApiKeys WHERE TenantId = @t ORDER BY CreatedAt DESC");
         cmd.With("@t", tenantId);
         var list = new List<ApiKeyInfo>();
@@ -65,7 +65,11 @@ public sealed class ApiKeyRepository(SqlConnectionFactory connections)
     public async Task<(ApiKeyInfo Key, string Hash)?> FindByPrefixAsync(string prefix, CancellationToken ct)
     {
         await using var c = await connections.OpenSystemAsync(ct);
-        await using var cmd = c.Command("SELECT * FROM dbo.ApiKeys WHERE Prefix = @p");
+        await using var cmd = c.Command("""
+            SELECT k.* FROM dbo.ApiKeys k
+            JOIN dbo.Tenants t ON t.Id = k.TenantId AND t.IsActive = 1
+            WHERE k.Prefix = @p
+            """);
         cmd.With("@p", prefix);
         await using var r = await cmd.ExecuteReaderAsync(ct);
         return await r.ReadAsync(ct) ? (Read(r), r.Get<string>("KeyHash")) : null;
@@ -73,16 +77,16 @@ public sealed class ApiKeyRepository(SqlConnectionFactory connections)
 
     public async Task<bool> RevokeAsync(Guid tenantId, Guid id, string user, DateTimeOffset at, CancellationToken ct)
     {
-        await using var c = await connections.OpenSystemAsync(ct);
+        await using var c = await connections.OpenForTenantAsync(tenantId, ct);
         await using var cmd = c.Command("UPDATE dbo.ApiKeys SET RevokedAt = @at, RevokedBy = @by WHERE TenantId = @t AND Id = @id AND RevokedAt IS NULL");
         return await cmd.With("@at", at).With("@by", user).With("@t", tenantId).With("@id", id).ExecuteNonQueryAsync(ct) == 1;
     }
 
-    public async Task TouchAsync(Guid id, DateTimeOffset at, CancellationToken ct)
+    public async Task TouchAsync(Guid tenantId, Guid id, DateTimeOffset at, CancellationToken ct)
     {
-        await using var c = await connections.OpenSystemAsync(ct);
-        await using var cmd = c.Command("UPDATE dbo.ApiKeys SET LastUsedAt = @at WHERE Id = @id AND (LastUsedAt IS NULL OR LastUsedAt < DATEADD(MINUTE, -5, @at))");
-        await cmd.With("@at", at).With("@id", id).ExecuteNonQueryAsync(ct);
+        await using var c = await connections.OpenForTenantAsync(tenantId, ct);
+        await using var cmd = c.Command("UPDATE dbo.ApiKeys SET LastUsedAt = @at WHERE Id = @id AND TenantId = @t AND RevokedAt IS NULL AND (LastUsedAt IS NULL OR LastUsedAt < DATEADD(MINUTE, -5, @at))");
+        await cmd.With("@at", at).With("@id", id).With("@t", tenantId).ExecuteNonQueryAsync(ct);
     }
 
     private static ApiKeyInfo Read(SqlDataReader r) => new(
@@ -159,6 +163,7 @@ public sealed class ApiKeyAuthenticationHandler(
     ILoggerFactory logger,
     UrlEncoder encoder,
     ApiKeyRepository repository,
+    SecurityPolicyService policies,
     IClock clock) : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
 {
     public const string SchemeName = "ApiKey";
@@ -194,7 +199,13 @@ public sealed class ApiKeyAuthenticationHandler(
             return AuthenticateResult.Fail("API anahtarı iptal edilmiş veya süresi dolmuş.");
         }
 
-        await repository.TouchAsync(info.Id, now, Context.RequestAborted);
+        if ((await policies.GetCurrentAsync(info.TenantId, Context.RequestAborted)).ApiKeyMaxDays is { } days
+            && info.CreatedAt.AddDays(days) <= now)
+        {
+            return AuthenticateResult.Fail("API anahtarının geçerlilik süresi firma politikası uyarınca dolmuş.");
+        }
+
+        await repository.TouchAsync(info.TenantId, info.Id, now, Context.RequestAborted);
         var claims = new List<Claim>
         {
             new(GibFrameworkClaims.Subject, $"api:{info.Name}"),

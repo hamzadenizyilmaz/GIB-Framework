@@ -1,8 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
-    <Version>5.2.1</Version>
+    <TargetFramework>net10.0</TargetFramework>
+    <Version>5.5.1</Version>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>GIBFramework</RootNamespace>
@@ -20,12 +20,12 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="9.0.20" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.15" />
     <PackageReference Include="Microsoft.Data.SqlClient" Version="7.1.1" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="9.0.6" />
     <PackageReference Include="Swashbuckle.AspNetCore.ReDoc" Version="9.0.6" />
-    <PackageReference Include="System.Security.Cryptography.Xml" Version="9.0.20" />
-    <PackageReference Include="QRCoder" Version="1.8.0" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.15" />
+    <PackageReference Include="QRCoder" Version="1.8.1" />
     <PackageReference Include="PdfPig" Version="0.1.16" />
   </ItemGroup>
 
@@ -39,18 +39,21 @@
 
   <ItemGroup>
     <Content Update="DAL\Seed\**\*.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Update="appsettings.Development.json" CopyToPublishDirectory="Never" />
+    <Content Update="appsettings.*.json" CopyToPublishDirectory="Never" />
   </ItemGroup>
 
-  <Target Name="ClientAppInstall" BeforeTargets="ClientAppBuild" Condition="'$(DesignTimeBuild)' != 'true' And !Exists('$(ClientAppDir)node_modules')">
+  <Target Name="ClientAppInstall" Condition="'$(DesignTimeBuild)' != 'true'"
+          Inputs="$(ClientAppDir)package.json;$(ClientAppDir)package-lock.json"
+          Outputs="$(ClientAppDir)node_modules\.gib-install;$(ClientAppDir)node_modules\vite\package.json">
     <Exec Command="node --version" ContinueOnError="true" StandardOutputImportance="low">
       <Output TaskParameter="ExitCode" PropertyName="NodeExitCode" />
     </Exec>
-    <Error Condition="'$(NodeExitCode)' != '0'" Text="Node.js bulunamadı. Panel derlemesi için Node.js 20 veya üstünü kurun: https://nodejs.org" />
+    <Error Condition="'$(NodeExitCode)' != '0'" Text="Panel derlemesi için Node.js 24 kurun." />
     <Exec WorkingDirectory="$(ClientAppDir)" Command="npm ci" />
+    <Touch Files="$(ClientAppDir)node_modules\.gib-install" AlwaysCreate="true" />
   </Target>
 
-  <Target Name="ClientAppBuild" BeforeTargets="BeforeBuild" Condition="'$(DesignTimeBuild)' != 'true'" Inputs="@(ClientAppSource)" Outputs="wwwroot\app\index.html">
+  <Target Name="ClientAppBuild" BeforeTargets="BeforeBuild" DependsOnTargets="ClientAppInstall" Condition="'$(DesignTimeBuild)' != 'true'" Inputs="@(ClientAppSource);$(ClientAppDir)node_modules\.gib-install" Outputs="wwwroot\app\index.html">
     <Exec WorkingDirectory="$(ClientAppDir)" Command="npm run build" />
   </Target>
 

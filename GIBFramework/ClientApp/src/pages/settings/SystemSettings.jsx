@@ -110,6 +110,11 @@ export function SystemSettings() {
       <ErrorAlert error={error} />
       {loading && !status ? <Spinner /> : status && (
         <>
+          {status.readiness && <div className={`alert alert-${status.readiness.ready ? 'success' : 'warning'}`} role="status">
+            <strong>{status.readiness.ready ? 'Uygulama hazır' : 'Uygulama hazırlık denetimini geçemedi'}</strong>
+            <span className="ms-2">{status.readiness.durationMs} ms</span>
+            {status.readiness.reason && <div>{status.readiness.reason}</div>}
+          </div>}
           <div className="row g-3 mb-4">
             <div className="col-sm-6 col-xl-3">
               <div className="card stat-card shadow-sm h-100"><div className="card-body">

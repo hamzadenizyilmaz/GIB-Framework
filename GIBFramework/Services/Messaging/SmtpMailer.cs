@@ -7,7 +7,7 @@ using GIBFramework.Models.Messaging;
 
 namespace GIBFramework.Services.Messaging;
 
-public sealed record SmtpEndpoint(string Host, int Port, SmtpSecurity Security, string? UserName, string? Password, string FromAddress, string FromName, string? ReplyTo);
+public sealed record SmtpEndpoint(string Host, int Port, SmtpSecurity Security, string? UserName, string? Password, string FromAddress, string FromName, string? ReplyTo, bool TenantConfigured = false);
 
 public sealed record MailAttachment(string FileName, string ContentType, byte[] Content, string? ContentId = null);
 
@@ -139,12 +139,16 @@ public static class MimeBuilder
     private static string Boundary() => "=_gf_" + Guid.NewGuid().ToString("N");
 }
 
-public sealed class SmtpMailer(MessagingOptions options)
+public sealed class SmtpMailer(MessagingOptions options, Infrastructure.OutboundNetwork network)
 {
     public async Task<string> SendAsync(SmtpEndpoint endpoint, MailMessageData message, DateTimeOffset now, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
         ArgumentNullException.ThrowIfNull(message);
+        if (!string.IsNullOrEmpty(endpoint.UserName) && endpoint.Security == SmtpSecurity.None)
+        {
+            throw new SmtpException("SMTP kimlik doğrulaması için STARTTLS veya SSL gereklidir.");
+        }
         var domain = endpoint.FromAddress.Contains('@', StringComparison.Ordinal) ? endpoint.FromAddress[(endpoint.FromAddress.IndexOf('@', StringComparison.Ordinal) + 1)..] : "gibframework.local";
         var messageId = $"{Guid.NewGuid():N}@{domain}";
         var mime = MimeBuilder.Build(endpoint, message, now, messageId);
@@ -155,7 +159,18 @@ public sealed class SmtpMailer(MessagingOptions options)
         using var tcp = new TcpClient();
         try
         {
-            await tcp.ConnectAsync(endpoint.Host, endpoint.Port, token);
+            if (endpoint.TenantConfigured)
+            {
+                await network.ConnectSmtpAsync(tcp.Client, endpoint.Host, endpoint.Port, token);
+            }
+            else
+            {
+                await tcp.ConnectAsync(endpoint.Host, endpoint.Port, token);
+            }
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new SmtpException(ex.Message);
         }
         catch (SocketException ex)
         {
@@ -167,6 +182,7 @@ public sealed class SmtpMailer(MessagingOptions options)
         }
 
         Stream stream = tcp.GetStream();
+        var sendingData = false;
         try
         {
             if (endpoint.Security == SmtpSecurity.SslOnConnect)
@@ -181,7 +197,7 @@ public sealed class SmtpMailer(MessagingOptions options)
             {
                 if (!capabilities.Any(c => c.StartsWith("STARTTLS", StringComparison.OrdinalIgnoreCase)))
                 {
-                    throw new SmtpException("SMTP sunucusu STARTTLS desteklemiyor; güvenlik türünü SSL (465) veya Yok olarak değiştirin.");
+                    throw new SmtpException("SMTP sunucusu STARTTLS desteklemiyor. Sunucunun TLS ayarlarını doğrulayın.");
                 }
 
                 await session.CommandAsync("STARTTLS", 220, token);
@@ -198,13 +214,14 @@ public sealed class SmtpMailer(MessagingOptions options)
             await session.CommandAsync($"MAIL FROM:<{endpoint.FromAddress.Trim()}>", 250, token);
             await session.CommandAsync($"RCPT TO:<{message.ToAddress.Trim()}>", [250, 251], token);
             await session.CommandAsync("DATA", 354, token);
+            sendingData = true;
             await session.WriteDataAsync(mime, token);
             var accepted = await session.ExpectAsync(250, token);
             try
             {
                 await session.CommandAsync("QUIT", 221, token);
             }
-            catch (Exception ex) when (ex is SmtpException or IOException)
+            catch (Exception ex) when (ex is SmtpException or IOException or OperationCanceledException)
             {
             }
 
@@ -212,11 +229,11 @@ public sealed class SmtpMailer(MessagingOptions options)
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            throw new SmtpException("SMTP sunucusu zamanında yanıt vermedi.", transient: true);
+            throw new SmtpException(sendingData ? "SMTP teslimat sonucu belirsiz. Sağlayıcı kaydını doğrulayın." : "SMTP sunucusu zamanında yanıt vermedi.", transient: !sendingData);
         }
-        catch (IOException ex)
+        catch (IOException)
         {
-            throw new SmtpException("SMTP bağlantısı kesildi: " + ex.Message, transient: true);
+            throw new SmtpException(sendingData ? "SMTP teslimat sonucu belirsiz. Sağlayıcı kaydını doğrulayın." : "SMTP bağlantısı kesildi.", transient: !sendingData);
         }
         catch (AuthenticationException ex)
         {

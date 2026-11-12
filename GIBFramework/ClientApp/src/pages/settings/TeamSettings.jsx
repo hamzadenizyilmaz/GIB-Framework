@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { api } from '../../api.js';
 import { fmtDate } from '../../format.js';
 import { useSession } from '../../session.jsx';
-import { BusyButton, Card, Empty, Spinner, useDialogs, useLoad, useToast } from '../../components/ui.jsx';
+import { BusyButton, Card, Empty, ErrorAlert, Spinner, useDialogs, useLoad, useToast } from '../../components/ui.jsx';
 import { SettingsLayout } from './SettingsLayout.jsx';
 
 function useRoles() {
@@ -67,14 +67,21 @@ export function UsersSettings() {
   const dialogs = useDialogs();
   const toast = useToast();
   const [tab, setTab] = useState('users');
+  const [tenantFilter, setTenantFilter] = useState('');
   const platform = session.hasRole('PlatformSuperAdmin');
-  const { data: roleData } = useRoles();
-  const { data, loading, reload } = useLoad(async () => {
-    const [users, tenants] = await Promise.all([api.get('/api/v1/users'), platform ? api.get('/api/v1/tenants').catch(() => []) : []]);
+  const roleList = useRoles();
+  const roleData = roleList.data;
+  const { data, loading, reload, error } = useLoad(async () => {
+    const query = platform && tenantFilter ? `?tenantId=${encodeURIComponent(tenantFilter)}` : '';
+    const [users, tenants] = await Promise.all([api.get('/api/v1/users' + query), platform ? api.get('/api/v1/tenants') : []]);
     return { users, tenants };
-  }, [platform]);
+  }, [platform, tenantFilter]);
 
   const myRank = useMemo(() => Math.max(0, ...((roleData?.roles || []).filter((r) => session.permissions.roles.includes(r.code)).map((r) => r.rank))), [roleData, session.permissions]);
+  if (error || roleList.error) return <SettingsLayout icon="people" title="Kullanıcılar">
+    <ErrorAlert error={error || roleList.error} />
+    <button className="btn btn-primary" onClick={() => Promise.all([reload(), roleList.reload()])}>Tekrar dene</button>
+  </SettingsLayout>;
   if (loading || !roleData) return <SettingsLayout icon="people" title="Kullanıcılar"><Spinner /></SettingsLayout>;
 
   const catalog = roleData.roles;
@@ -169,6 +176,13 @@ export function UsersSettings() {
             <li className="nav-item"><button type="button" className={`nav-link ${tab === 'requests' ? 'active' : ''}`} onClick={() => setTab('requests')}>Şifre talepleri</button></li>
           </ul>
         </div>
+        {platform && tab === 'users' && <div className="card-body py-2">
+          <label className="form-label" htmlFor="user-tenant-filter">Kullanıcı listesi kapsamı</label>
+          <select className="form-select form-select-sm" id="user-tenant-filter" value={tenantFilter} onChange={(event) => setTenantFilter(event.target.value)}>
+            <option value="">Platform geneli · Tüm kullanıcılar</option>
+            {data.tenants.map((tenant) => <option key={tenant.id} value={tenant.id}>{tenant.name}</option>)}
+          </select>
+        </div>}
         {tab === 'requests' ? <div className="card-body"><ResetRequests users={data.users} onReset={resetPassword} /></div> : (
           <div className="table-responsive">
             <table className="table align-middle mb-0">

@@ -1,4 +1,5 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Link } from 'react-router';
 import { ApiError } from '../api.js';
 import { DOC_TYPES, STATUS } from '../format.js';
@@ -45,24 +46,77 @@ export function useToast() {
   return toast;
 }
 
+const openModals = [];
+const focusable = 'a[href], button, input, select, textarea, [tabindex]';
+
 export function Modal({ title, size, onClose, children, footer, scrollable }) {
-  useEffect(() => {
-    const onKey = (e) => e.key === 'Escape' && onClose?.();
+  const titleId = useId();
+  const dialogRef = useRef(null);
+  const backdropRef = useRef(null);
+  const openerRef = useRef(document.activeElement);
+  const closeRef = useRef(onClose);
+  useLayoutEffect(() => { closeRef.current = onClose; }, [onClose]);
+  useLayoutEffect(() => {
+    const dialog = dialogRef.current;
+    const opener = openerRef.current;
+    const appRoot = document.getElementById('root');
+    const previous = openModals.at(-1);
+    if (previous) {
+      previous.inert = true;
+      previous.removeAttribute('aria-modal');
+    }
+    openModals.push(dialog);
+    const depth = openModals.length - 1;
+    dialog.style.zIndex = 1055 + depth * 20;
+    backdropRef.current.style.zIndex = 1050 + depth * 20;
+    const controls = () => [...dialog.querySelectorAll(focusable)].filter(
+      (element) => !element.matches(':disabled') && element.tabIndex >= 0 && element.getClientRects().length);
+    const first = controls().find((element) => element.matches('input,select,textarea')) || controls()[0] || dialog;
+    first.focus();
+    if (appRoot) appRoot.inert = true;
+    const onKey = (e) => {
+      if (openModals.at(-1) !== dialog || e.defaultPrevented) return;
+      if (e.key === 'Escape' && closeRef.current) {
+        e.preventDefault();
+        closeRef.current();
+      }
+      if (e.key !== 'Tab') return;
+      const elements = controls();
+      const current = elements.indexOf(document.activeElement);
+      if (current < 0 || (e.shiftKey ? current === 0 : current === elements.length - 1)) {
+        e.preventDefault();
+        (e.shiftKey ? elements.at(-1) || dialog : elements[0] || dialog).focus();
+      }
+    };
     document.addEventListener('keydown', onKey);
     document.body.classList.add('modal-open');
     return () => {
       document.removeEventListener('keydown', onKey);
-      document.body.classList.remove('modal-open');
+      const wasTop = openModals.at(-1) === dialog;
+      openModals.splice(openModals.indexOf(dialog), 1);
+      const top = openModals.at(-1);
+      if (!top) {
+        document.body.classList.remove('modal-open');
+        if (appRoot) appRoot.inert = false;
+      }
+      if (wasTop) {
+        if (top) {
+          top.inert = false;
+          top.setAttribute('aria-modal', 'true');
+        }
+        if (opener?.isConnected && (!top || top.contains(opener))) opener.focus();
+        else top?.focus();
+      }
     };
-  }, [onClose]);
+  }, []);
 
-  return (
+  return createPortal(
     <>
-      <div className="modal d-block" tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="app-modal-title" onMouseDown={(e) => e.target === e.currentTarget && onClose?.()}>
+      <div ref={dialogRef} className="modal d-block" tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby={titleId} onMouseDown={(e) => e.target === e.currentTarget && openModals.at(-1) === e.currentTarget && onClose?.()}>
         <div className={`modal-dialog modal-dialog-centered ${size ? `modal-${size}` : ''} ${scrollable ? 'modal-dialog-scrollable' : ''}`}>
           <div className="modal-content shadow">
             <div className="modal-header">
-              <h1 className="modal-title fs-5" id="app-modal-title">{title}</h1>
+              <h1 className="modal-title fs-5" id={titleId}>{title}</h1>
               {onClose && <button type="button" className="btn-close" aria-label="Kapat" onClick={onClose} />}
             </div>
             {children}
@@ -70,13 +124,13 @@ export function Modal({ title, size, onClose, children, footer, scrollable }) {
           </div>
         </div>
       </div>
-      <div className="modal-backdrop show" />
-    </>
+      <div ref={backdropRef} className="modal-backdrop show" />
+    </>, document.body
   );
 }
 
 function Field({ field, value, onChange }) {
-  const id = `f-${field.name}`;
+  const id = useId();
   const common = { id, name: field.name, required: field.required, autoComplete: field.autocomplete || 'off' };
   let control;
   if (field.type === 'select') {
@@ -125,10 +179,6 @@ function FormDialog({ options, onDone }) {
   const [validated, setValidated] = useState(false);
   const formRef = useRef(null);
 
-  useEffect(() => {
-    formRef.current?.querySelector('input,select,textarea')?.focus();
-  }, []);
-
   const submit = (e) => {
     e.preventDefault();
     if (!formRef.current.checkValidity()) {
@@ -160,33 +210,34 @@ const DialogContext = createContext(null);
 const DialogOpenContext = createContext(false);
 
 export function DialogProvider({ children }) {
-  const [dialog, setDialog] = useState(null);
+  const [dialogs, setDialogs] = useState([]);
 
   const form = useCallback((options) => new Promise((resolve) => {
-    setDialog({ kind: 'form', id: crypto.randomUUID(), options, resolve });
+    setDialogs((current) => [...current, { kind: 'form', id: crypto.randomUUID(), options, resolve }]);
   }), []);
 
   const show = useCallback((title, content, size = 'lg') => new Promise((resolve) => {
-    setDialog({ kind: 'content', options: { title, content, size }, resolve });
+    setDialogs((current) => [...current, { kind: 'content', id: crypto.randomUUID(), options: { title, content, size }, resolve }]);
   }), []);
 
   const confirm = useCallback(async (title, message, submitText = 'Onayla', submitVariant = 'primary') =>
     (await form({ title, body: <p className="mb-0">{message}</p>, submitText, submitVariant })) !== null, [form]);
 
-  const close = (result) => {
-    dialog?.resolve(result);
-    setDialog(null);
+  const close = (dialog, result) => {
+    setDialogs((current) => current.filter((item) => item !== dialog));
+    dialog.resolve(result);
   };
 
   return (
     <DialogContext.Provider value={{ form, confirm, show }}>
-      <DialogOpenContext.Provider value={!!dialog}>{children}</DialogOpenContext.Provider>
-      {dialog?.kind === 'form' && <FormDialog key={dialog.id} options={dialog.options} onDone={close} />}
-      {dialog?.kind === 'content' && (
-        <Modal title={dialog.options.title} size={dialog.options.size} scrollable onClose={() => close(null)}>
+      <DialogOpenContext.Provider value={dialogs.length > 0}>{children}</DialogOpenContext.Provider>
+      {dialogs.map((dialog) => dialog.kind === 'form' ? (
+        <FormDialog key={dialog.id} options={dialog.options} onDone={(result) => close(dialog, result)} />
+      ) : (
+        <Modal key={dialog.id} title={dialog.options.title} size={dialog.options.size} scrollable onClose={() => close(dialog, null)}>
           <div className="modal-body">{dialog.options.content}</div>
         </Modal>
-      )}
+      ))}
     </DialogContext.Provider>
   );
 }
@@ -198,7 +249,10 @@ export function BusyButton({ onClick, children, className = 'btn btn-primary', d
   const dialogOpen = useContext(DialogOpenContext);
   const toast = useToast();
   const mounted = useRef(true);
-  useEffect(() => () => { mounted.current = false; }, []);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
   const handle = async (e) => {
     if (!onClick) return;
@@ -222,17 +276,25 @@ export function BusyButton({ onClick, children, className = 'btn btn-primary', d
 
 export function useLoad(loader, deps) {
   const [state, setState] = useState({ loading: true, data: null, error: null });
+  const request = useRef(0);
   const run = useCallback(async () => {
+    const id = ++request.current;
     try {
       const data = await loader();
+      if (id !== request.current) return null;
       setState({ loading: false, data, error: null });
       return data;
     } catch (error) {
+      if (id !== request.current) return null;
       setState({ loading: false, data: null, error });
       return null;
     }
   }, deps);
-  useEffect(() => { setState((s) => ({ ...s, loading: true })); run(); }, [run]);
+  useLayoutEffect(() => {
+    setState({ loading: true, data: null, error: null });
+    run();
+    return () => { ++request.current; };
+  }, [run]);
   return { ...state, reload: run };
 }
 

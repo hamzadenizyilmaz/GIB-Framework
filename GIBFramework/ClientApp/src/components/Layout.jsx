@@ -3,7 +3,7 @@ import { Link, NavLink, useLocation, useNavigate } from 'react-router';
 import { api, LOGO_EVENT } from '../api.js';
 import { ROLE_LABELS } from '../format.js';
 import { useSession } from '../session.jsx';
-import { useToast } from './ui.jsx';
+import { useLoad, useToast } from './ui.jsx';
 import { LegalStrip } from './Brand.jsx';
 import { readAppearance, resolvedTheme, saveAppearance } from '../theme.js';
 
@@ -134,16 +134,19 @@ function ThemeToggle() {
 function TenantSwitcher() {
   const session = useSession();
   const toast = useToast();
-  const [tenants, setTenants] = useState([]);
-  useEffect(() => { api.get('/api/v1/tenants').then(setTenants).catch(() => setTenants([])); }, []);
+  const { data, loading, error, reload } = useLoad(() => api.get('/api/v1/tenants'), []);
+  if (error) return <button type="button" className="btn btn-outline-danger btn-sm" onClick={reload} title={error.message}>Firmaları tekrar yükle</button>;
   return (
-    <select className="form-select form-select-sm tenant-switch" aria-label="Firma seç" value={session.tenantOverride || ''}
+    <select className="form-select form-select-sm tenant-switch" aria-label="Firma seç" value={session.tenantOverride || ''} disabled={loading}
       onChange={async (e) => {
-        await session.selectTenant(e.target.value);
-        toast(e.target.value ? 'Firma seçildi.' : 'Firma bağlamı kaldırıldı.', 'info');
+        const id = e.target.value;
+        const selected = data?.find((tenant) => tenant.id === id);
+        if (await session.selectTenant(id)) {
+          toast(selected ? `${selected.name} seçildi.` : 'Firma bağlamı kaldırıldı.', 'info');
+        }
       }}>
-      <option value="">Firma seçin…</option>
-      {tenants.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+      <option value="">{loading ? 'Firmalar yükleniyor…' : 'Platform geneli'}</option>
+      {(data || []).filter((tenant) => tenant.isActive).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
     </select>
   );
 }

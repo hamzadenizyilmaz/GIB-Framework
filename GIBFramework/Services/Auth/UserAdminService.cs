@@ -12,6 +12,7 @@ public sealed record UserChanges(IReadOnlyList<string>? Roles, bool? IsActive, s
 
 public sealed partial class UserAdminService(
     IUserRepository users,
+    DAL.Tenants.ITenantRepository tenants,
     AuthService auth,
     Messaging.UserNotifier notifier,
     IAuditTrail audit,
@@ -24,7 +25,11 @@ public sealed partial class UserAdminService(
         ArgumentNullException.ThrowIfNull(sendCredentials);
         ArgumentNullException.ThrowIfNull(command);
         var tenantId = ResolveTenantScope(command.TenantId);
-        GuardRoles(command.Roles);
+        GuardRoles(command.Roles, tenantId);
+        if (tenantId is { } tenant && await tenants.GetAsync(tenant, ct) is not { IsActive: true })
+        {
+            throw new NotFoundException("Etkin firma bulunamadı.");
+        }
         if (!UserCodePattern().IsMatch(command.UserCode))
         {
             throw new ValidationFailedException("USER_CODE", "Kullanıcı kodu 3-50 karakter; harf, rakam, nokta, tire veya alt çizgi içerebilir.", []);
@@ -52,9 +57,9 @@ public sealed partial class UserAdminService(
         return (UserView.From(user, now), notification);
     }
 
-    public async Task<IReadOnlyList<UserView>> ListAsync(CancellationToken ct)
+    public async Task<IReadOnlyList<UserView>> ListAsync(Guid? tenantId, CancellationToken ct)
     {
-        Guid? scope = IsPlatformAdmin ? null : context.RequireTenant();
+        Guid? scope = IsPlatformAdmin ? tenantId : ResolveTenantScope(tenantId);
         var now = clock.UtcNow;
         return [.. (await users.ListAsync(scope, ct)).Select(u => UserView.From(u, now))];
     }
@@ -86,7 +91,7 @@ public sealed partial class UserAdminService(
 
         if (roles is not null)
         {
-            GuardRoles(roles, user.Roles);
+            GuardRoles(roles, user.TenantId, user.Roles);
             user.Roles = [.. roles.Distinct()];
         }
 
@@ -141,6 +146,11 @@ public sealed partial class UserAdminService(
 
     private Guid? ResolveTenantScope(Guid? requested)
     {
+        if (requested == Guid.Empty)
+        {
+            throw new ValidationFailedException("USER_TENANT", "Geçerli bir firma seçin.", []);
+        }
+
         if (IsPlatformAdmin)
         {
             return requested;
@@ -152,7 +162,7 @@ public sealed partial class UserAdminService(
             : throw new ForbiddenOperationException("USER_TENANT_SCOPE", "Yalnızca kendi firmanızda kullanıcı yönetebilirsiniz.");
     }
 
-    private void GuardRoles(IReadOnlyList<string> roles, IReadOnlyList<string>? currentRolesOfTarget = null)
+    private void GuardRoles(IReadOnlyList<string> roles, Guid? tenantId, IReadOnlyList<string>? currentRolesOfTarget = null)
     {
         var unknown = roles.Except(Roles.All).ToList();
         if (unknown.Count > 0)
@@ -160,12 +170,18 @@ public sealed partial class UserAdminService(
             throw new ValidationFailedException("USER_ROLES", "Tanımsız rol.", unknown);
         }
 
+        var platformRole = roles.Contains(Roles.PlatformSuperAdmin);
+        if (roles.Count == 0 || (platformRole ? tenantId is not null || roles.Any(r => r != Roles.PlatformSuperAdmin) : tenantId is null))
+        {
+            throw new ValidationFailedException("USER_ROLE_SCOPE", "Platform yöneticisi tek başına ve firmasız atanır. Diğer roller için firma zorunludur.", []);
+        }
+
         if (IsPlatformAdmin)
         {
             return;
         }
 
-        if (roles.Contains(Roles.PlatformSuperAdmin))
+        if (platformRole)
         {
             throw new ForbiddenOperationException("USER_ROLE_ESCALATION", "Platform yöneticisi rolünü yalnızca platform yöneticisi verebilir.");
         }
@@ -198,13 +214,8 @@ public sealed partial class UserAdminService(
 
     private async Task<UserAccount> LoadInScopeAsync(Guid id, CancellationToken ct)
     {
-        var user = await users.GetAsync(id, ct) ?? throw new NotFoundException("Kullanıcı bulunamadı.");
-        if (!IsPlatformAdmin && user.TenantId != context.RequireTenant())
-        {
-            throw new NotFoundException("Kullanıcı bulunamadı.");
-        }
-
-        return user;
+        return await users.GetAsync(id, IsPlatformAdmin ? null : context.RequireTenant(), ct)
+            ?? throw new NotFoundException("Kullanıcı bulunamadı.");
     }
 
     private Task AuditAsync(UserAccount user, string action, object? data, CancellationToken ct) =>

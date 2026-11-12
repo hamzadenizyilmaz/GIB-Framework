@@ -64,7 +64,7 @@ public static class ServiceCollectionExtensions
         services.AddOptionsInstance<WorkflowOptions>(configuration, WorkflowOptions.Section);
         var signing = services.AddOptionsInstance<SigningOptions>(configuration, SigningOptions.Section);
         var vault = services.AddOptionsInstance<EvidenceVaultOptions>(configuration, EvidenceVaultOptions.Section);
-        services.AddOptionsInstance<ProviderOptions>(configuration, ProviderOptions.Section);
+        var providers = services.AddOptionsInstance<ProviderOptions>(configuration, ProviderOptions.Section);
         services.AddOptionsInstance<UblOptions>(configuration, UblOptions.Section);
         var workers = services.AddOptionsInstance<WorkerOptions>(configuration, WorkerOptions.Section);
         services.AddOptionsInstance<BootstrapOptions>(configuration, BootstrapOptions.Section);
@@ -73,6 +73,12 @@ public static class ServiceCollectionExtensions
         var security = services.AddOptionsInstance<SecurityOptions>(configuration, SecurityOptions.Section);
 
         var demoHost = environment.IsEnvironment(DemoEnvironment);
+        var localMode = environment.IsDevelopment() || demoHost;
+        if (!string.IsNullOrWhiteSpace(jwt.Authority) || string.IsNullOrWhiteSpace(jwt.Issuer)
+            || Encoding.UTF8.GetByteCount(jwt.SigningKey) < 32)
+        {
+            throw new InvalidOperationException("Yerel oturum için Jwt:Issuer ve en az 32 baytlık Jwt:SigningKey gereklidir. Jwt:Authority desteklenmez.");
+        }
         if (!environment.IsDevelopment()
             && (jwt.DevTokenEnabled || jwt.SigningKey.Contains("DEV-ONLY", StringComparison.Ordinal) || jwt.SigningKey.Length < 32))
         {
@@ -96,7 +102,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IPasswordHasher<UserAccount>, PasswordHasher<UserAccount>>();
         services.AddHttpContextAccessor();
         services.AddMemoryCache();
-        services.AddSingleton<SecurityStampCache>();
         services.AddRateLimiter(o =>
         {
             o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -134,11 +139,17 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IEvidenceVault>(sp => new FileSystemEvidenceVault(
             Path.GetFullPath(vault.RootPath, environment.ContentRootPath), sp.GetRequiredService<IClock>()));
         services.AddSingleton<SandboxEDocumentProvider>();
-        services.AddSingleton<IEDocumentProvider>(sp => sp.GetRequiredService<SandboxEDocumentProvider>());
+        if (localMode && !providers.PortalOnly)
+        {
+            services.AddSingleton<IEDocumentProvider>(sp => sp.GetRequiredService<SandboxEDocumentProvider>());
+        }
         services.AddSingleton<IEDocumentProvider, GibDirectProvider>();
         services.AddSingleton<ProviderRegistry>();
         services.AddSingleton<IDocumentNumberAllocator, SqlDocumentNumberAllocator>();
         services.AddSingleton<SchemaVerifier>();
+        services.AddSingleton<DatabaseInitialization>();
+        services.AddHostedService(sp => sp.GetRequiredService<DatabaseInitialization>());
+        services.AddSingleton<ReadinessCheck>();
 
         services.AddScoped<RequestTenantContext>();
         services.AddScoped<ITenantContext>(sp => sp.GetRequiredService<RequestTenantContext>());
@@ -184,7 +195,7 @@ public static class ServiceCollectionExtensions
             c.DefaultRequestHeaders.AcceptLanguage.ParseAdd("tr,en-US;q=0.9,en;q=0.8");
             c.DefaultRequestHeaders.CacheControl = new System.Net.Http.Headers.CacheControlHeaderValue { NoCache = true };
             c.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (compatible; GIBFramework/1.0)");
-        }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { UseCookies = false });
+        }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { UseCookies = false, AllowAutoRedirect = false }).RemoveAllLoggers();
         services.AddSingleton<GibPortalClient>();
         services.AddSingleton<GibPortalSessionStore>();
         services.AddScoped<GibPortalService>();
@@ -194,12 +205,12 @@ public static class ServiceCollectionExtensions
             c.Timeout = TimeSpan.FromSeconds(60);
             c.DefaultRequestHeaders.UserAgent.ParseAdd("GIBFramework-LegalSourceWatcher/1.0");
         });
-        if (workers.DispatcherEnabled)
+        if (localMode && !providers.PortalOnly && workers.DispatcherEnabled && !string.IsNullOrWhiteSpace(database.ConnectionString))
         {
             services.AddHostedService<DispatcherWorker>();
         }
 
-        if (workers.ReconciliationEnabled)
+        if (localMode && !providers.PortalOnly && workers.ReconciliationEnabled && !string.IsNullOrWhiteSpace(database.ConnectionString))
         {
             services.AddHostedService<ReconciliationWorker>();
         }
@@ -220,19 +231,45 @@ public static class ServiceCollectionExtensions
         services.AddScoped<PasswordResetRequestService>();
 
         services.AddOptionsInstance<AppOptions>(configuration, AppOptions.Section);
+        services.AddOptionsInstance<OutboundNetworkOptions>(configuration, OutboundNetworkOptions.Section);
+        services.AddSingleton<GIBFramework.Infrastructure.OutboundNetwork>();
         var messaging = services.AddOptionsInstance<MessagingOptions>(configuration, MessagingOptions.Section);
         services.AddHttpClient(NetgsmClient.HttpClientName, c =>
         {
             c.Timeout = TimeSpan.FromSeconds(30);
             c.DefaultRequestHeaders.UserAgent.ParseAdd("GIBFramework/5.2");
-        });
+        }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false }).RemoveAllLoggers();
         services.AddHttpClient(IntegrationService.HttpClientName, c =>
         {
             c.Timeout = TimeSpan.FromSeconds(20);
             c.DefaultRequestHeaders.UserAgent.ParseAdd("GIBFramework-Webhook/5.2");
-        }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+        }).ConfigurePrimaryHttpMessageHandler(sp =>
+        {
+            var network = sp.GetRequiredService<GIBFramework.Infrastructure.OutboundNetwork>();
+            return new SocketsHttpHandler
+            {
+                AllowAutoRedirect = false,
+                UseProxy = false,
+                UseCookies = false,
+                ConnectCallback = async (connection, ct) =>
+                {
+                    var socket = new System.Net.Sockets.Socket(System.Net.Sockets.SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp);
+                    try
+                    {
+                        await network.ConnectWebhookAsync(socket, connection.DnsEndPoint, ct);
+                        return new System.Net.Sockets.NetworkStream(socket, ownsSocket: true);
+                    }
+                    catch
+                    {
+                        socket.Dispose();
+                        throw;
+                    }
+                },
+            };
+        }).RemoveAllLoggers();
         services.AddOptionsInstance<MarketplaceOptions>(configuration, MarketplaceOptions.Section);
-        services.AddHttpClient(MarketplaceClientBase.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(40));
+        services.AddHttpClient(MarketplaceClientBase.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(40))
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false }).RemoveAllLoggers();
         services.AddSingleton<IMarketplaceClient, TrendyolClient>();
         services.AddSingleton<IMarketplaceClient, HepsiburadaClient>();
         services.AddSingleton<IMarketplaceClient, N11Client>();
@@ -259,7 +296,8 @@ public static class ServiceCollectionExtensions
                 o.DefaultChallengeScheme = AuthSchemeSelector;
             })
             .AddPolicyScheme(AuthSchemeSelector, "JWT veya API anahtarı", o => o.ForwardDefaultSelector = ctx =>
-                ctx.Request.Headers.ContainsKey(ApiKeyAuthenticationHandler.HeaderName) ? ApiKeyAuthenticationHandler.SchemeName : JwtBearerDefaults.AuthenticationScheme)
+                !ctx.Request.Headers.ContainsKey("Authorization") && ctx.Request.Headers.ContainsKey(ApiKeyAuthenticationHandler.HeaderName)
+                    ? ApiKeyAuthenticationHandler.SchemeName : JwtBearerDefaults.AuthenticationScheme)
             .AddScheme<AuthenticationSchemeOptions, ApiKeyAuthenticationHandler>(ApiKeyAuthenticationHandler.SchemeName, null)
             .AddJwtBearer(o =>
         {
@@ -274,21 +312,10 @@ public static class ServiceCollectionExtensions
                 ClockSkew = TimeSpan.FromMinutes(1),
             };
 
-            if (!string.IsNullOrWhiteSpace(jwt.SigningKey))
-            {
-                o.TokenValidationParameters.ValidateIssuer = true;
-                o.TokenValidationParameters.ValidIssuer = jwt.Issuer;
-                o.TokenValidationParameters.IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwt.SigningKey));
-            }
-            else if (!string.IsNullOrWhiteSpace(jwt.Authority))
-            {
-                o.Authority = jwt.Authority;
-                o.RequireHttpsMetadata = !environment.IsDevelopment();
-            }
-            else
-            {
-                throw new InvalidOperationException("Jwt:SigningKey (yerel hesaplar) veya Jwt:Authority (harici OIDC) yapılandırılmalıdır.");
-            }
+            o.TokenValidationParameters.ValidateIssuer = true;
+            o.TokenValidationParameters.ValidIssuer = jwt.Issuer;
+            o.TokenValidationParameters.IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwt.SigningKey));
+            o.TokenValidationParameters.ValidAlgorithms = [SecurityAlgorithms.HmacSha256];
 
             o.Events = new JwtBearerEvents
             {
@@ -296,15 +323,21 @@ public static class ServiceCollectionExtensions
                 {
                     var stamp = ctx.Principal?.FindFirst(TokenService.SecurityStampClaim)?.Value;
                     var userCode = ctx.Principal?.FindFirst(GibFrameworkClaims.Subject)?.Value;
-                    if (stamp is null || userCode is null)
+                    var method = ctx.Principal?.FindFirst(TokenService.AuthMethodClaim)?.Value;
+                    if (environment.IsDevelopment() && jwt.DevTokenEnabled && method == "dev"
+                        && !string.IsNullOrWhiteSpace(userCode))
                     {
                         return;
                     }
 
-                    var services = ctx.HttpContext.RequestServices;
-                    var current = await services.GetRequiredService<SecurityStampCache>().GetAsync(
-                        userCode,
-                        () => services.GetRequiredService<IUserRepository>().GetSecurityStampAsync(userCode, ctx.HttpContext.RequestAborted));
+                    if (!Guid.TryParseExact(stamp, "N", out _) || string.IsNullOrWhiteSpace(userCode) || method is not ("pwd" or "mfa"))
+                    {
+                        ctx.Fail("Oturum kimliği geçersiz.");
+                        return;
+                    }
+
+                    var current = await ctx.HttpContext.RequestServices.GetRequiredService<IUserRepository>()
+                        .GetSecurityStampAsync(userCode, ctx.HttpContext.RequestAborted);
                     if (current?.ToString("N") != stamp)
                     {
                         ctx.Fail("Oturum geçersiz kılındı.");
@@ -331,7 +364,7 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
-    public static async Task InitializeGibFrameworkAsync(this IServiceProvider services, CancellationToken ct = default)
+    public static void InitializeGibFramework(this IServiceProvider services)
     {
         ArgumentNullException.ThrowIfNull(services);
         _ = services.GetRequiredService<ComplianceEngine>();
@@ -342,14 +375,6 @@ public static class ServiceCollectionExtensions
             _ = services.GetRequiredService<ISigningCertificateProvider>().GetSigningCertificate();
         }
 
-        if (!string.IsNullOrWhiteSpace(services.GetRequiredService<DatabaseOptions>().ConnectionString))
-        {
-            await services.GetRequiredService<SchemaVerifier>().VerifyAsync(ct);
-            await using var scope = services.CreateAsyncScope();
-            scope.ServiceProvider.GetRequiredService<RequestTenantContext>().UseSystem();
-            await scope.ServiceProvider.GetRequiredService<UserBootstrapper>().EnsureAdminAsync(ct);
-            await scope.ServiceProvider.GetRequiredService<DemoDataSeeder>().EnsureAsync(ct);
-        }
     }
 
     private static T AddOptionsInstance<T>(this IServiceCollection services, IConfiguration configuration, string section)

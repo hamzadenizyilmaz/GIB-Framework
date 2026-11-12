@@ -17,11 +17,14 @@ public sealed class SecurityPolicyService(ITenantSettingsRepository settings, IM
 
     private static readonly TimeSpan CacheLifetime = TimeSpan.FromSeconds(30);
 
+    public async Task<SecurityPolicy> GetCurrentAsync(Guid tenantId, CancellationToken ct) =>
+        (await settings.GetAsync(tenantId, ct)).Security ?? new SecurityPolicy();
+
     public async Task<SecurityPolicy> GetAsync(Guid tenantId, CancellationToken ct) =>
         await cache.GetOrCreateAsync(Key(tenantId), async e =>
         {
             e.AbsoluteExpirationRelativeToNow = CacheLifetime;
-            return (await settings.GetAsync(tenantId, ct)).Security ?? new SecurityPolicy();
+            return await GetCurrentAsync(tenantId, ct);
         }) ?? new SecurityPolicy();
 
     public async Task<SecurityPolicy> SaveAsync(SecurityPolicyRequest request, bool actorUsedMfa, CancellationToken ct)

@@ -99,6 +99,8 @@ public sealed class MessageExtras
 
 public sealed class OutboundMessage
 {
+    internal Guid? LeaseId { get; set; }
+    internal long? OutboxEventId { get; set; }
     public Guid Id { get; set; }
 
     public Guid? TenantId { get; set; }
@@ -161,6 +163,6 @@ public sealed record MessageView(
         m.NextAttemptAt, m.LastError, m.ProviderMessageId, m.CreatedBy, m.CreatedAt, m.SentAt);
 }
 
-public sealed record OutboxEvent(long Id, Guid? TenantId, string EventType, string EntityType, string EntityId, string PayloadJson, DateTimeOffset CreatedAt, int Attempts);
+public sealed record OutboxEvent(long Id, Guid? TenantId, string EventType, string EntityType, string EntityId, string PayloadJson, DateTimeOffset CreatedAt, int Attempts, Guid LeaseId);
 
 public sealed record NotificationRecipient(string Name, string? Email, string? Phone);

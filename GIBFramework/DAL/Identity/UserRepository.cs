@@ -8,7 +8,7 @@ public interface IUserRepository
 {
     Task<UserAccount?> FindByCodeAsync(string userCode, CancellationToken cancellationToken);
 
-    Task<UserAccount?> GetAsync(Guid id, CancellationToken cancellationToken);
+    Task<UserAccount?> GetAsync(Guid id, Guid? tenantId, CancellationToken cancellationToken);
 
     Task<IReadOnlyList<UserAccount>> ListAsync(Guid? tenantId, CancellationToken cancellationToken);
 
@@ -21,7 +21,7 @@ public interface IUserRepository
     Task<Guid?> GetSecurityStampAsync(string userCode, CancellationToken cancellationToken);
 }
 
-public sealed class UserRepository(SqlConnectionFactory connections, Services.Auth.SecurityStampCache stamps) : IUserRepository
+public sealed class UserRepository(SqlConnectionFactory connections) : IUserRepository
 {
     public async Task<UserAccount?> FindByCodeAsync(string userCode, CancellationToken cancellationToken)
     {
@@ -31,17 +31,17 @@ public sealed class UserRepository(SqlConnectionFactory connections, Services.Au
         return (await ReadAsync(cmd, cancellationToken)).FirstOrDefault();
     }
 
-    public async Task<UserAccount?> GetAsync(Guid id, CancellationToken cancellationToken)
+    public async Task<UserAccount?> GetAsync(Guid id, Guid? tenantId, CancellationToken cancellationToken)
     {
-        await using var conn = await connections.OpenSystemAsync(cancellationToken);
-        await using var cmd = conn.Command("SELECT * FROM dbo.Users WHERE Id = @id");
-        cmd.With("@id", id);
+        await using var conn = tenantId is { } t ? await connections.OpenForTenantAsync(t, cancellationToken) : await connections.OpenSystemAsync(cancellationToken);
+        await using var cmd = conn.Command("SELECT * FROM dbo.Users WHERE Id = @id AND (@tenant IS NULL OR TenantId = @tenant)");
+        cmd.With("@id", id).With("@tenant", tenantId);
         return (await ReadAsync(cmd, cancellationToken)).FirstOrDefault();
     }
 
     public async Task<IReadOnlyList<UserAccount>> ListAsync(Guid? tenantId, CancellationToken cancellationToken)
     {
-        await using var conn = await connections.OpenSystemAsync(cancellationToken);
+        await using var conn = tenantId is { } t ? await connections.OpenForTenantAsync(t, cancellationToken) : await connections.OpenSystemAsync(cancellationToken);
         await using var cmd = conn.Command("SELECT * FROM dbo.Users WHERE @t IS NULL OR TenantId = @t ORDER BY UserCode");
         cmd.With("@t", tenantId);
         return await ReadAsync(cmd, cancellationToken);
@@ -57,7 +57,7 @@ public sealed class UserRepository(SqlConnectionFactory connections, Services.Au
     public async Task InsertAsync(UserAccount user, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(user);
-        await using var conn = await connections.OpenSystemAsync(cancellationToken);
+        await using var conn = user.TenantId is { } t ? await connections.OpenForTenantAsync(t, cancellationToken) : await connections.OpenSystemAsync(cancellationToken);
         await using var cmd = conn.Command("""
             INSERT dbo.Users (Id, TenantId, UserCode, DisplayName, Email, Phone, PasswordHash, RolesCsv, IsActive, MustChangePassword, FailedLoginCount,
                               LockoutUntil, TotpSecretProtected, TotpEnabled, TotpLastStep, SecurityStamp, CreatedAt, UpdatedAt, LastLoginAt)
@@ -77,22 +77,26 @@ public sealed class UserRepository(SqlConnectionFactory connections, Services.Au
     public async Task UpdateAsync(UserAccount user, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(user);
-        await using var conn = await connections.OpenSystemAsync(cancellationToken);
+        await using var conn = user.TenantId is { } t ? await connections.OpenForTenantAsync(t, cancellationToken) : await connections.OpenSystemAsync(cancellationToken);
         await using var cmd = conn.Command("""
             UPDATE dbo.Users SET TenantId = @t, DisplayName = @n, Email = @e, Phone = @ph, PasswordHash = @h, RolesCsv = @r, IsActive = @a,
                    MustChangePassword = @m, FailedLoginCount = @f, LockoutUntil = @l, TotpSecretProtected = @ts, TotpEnabled = @te,
                    TotpLastStep = @tl, SecurityStamp = @s, UpdatedAt = @ua, LastLoginAt = @ll
-             WHERE Id = @id AND UserCode = @c
+             OUTPUT inserted.RowVersion
+             WHERE Id = @id AND UserCode = @c AND RowVersion = @rv AND (TenantId = @t OR (TenantId IS NULL AND @t IS NULL))
             """);
         Bind(cmd, user);
-        await cmd.ExecuteNonQueryAsync(cancellationToken);
-        stamps.Invalidate(user.UserCode);
+        user.RowVersion = await cmd.With("@rv", user.RowVersion).ExecuteScalarAsync(cancellationToken) as byte[]
+            ?? throw new ConflictException("USER_CONCURRENCY", "Kullanıcı bilgileri değişti. İşlemi yeniden deneyin.");
     }
 
     public async Task<Guid?> GetSecurityStampAsync(string userCode, CancellationToken cancellationToken)
     {
         await using var conn = await connections.OpenSystemAsync(cancellationToken);
-        await using var cmd = conn.Command("SELECT SecurityStamp FROM dbo.Users WHERE UserCode = @c AND IsActive = 1");
+        await using var cmd = conn.Command("""
+            SELECT u.SecurityStamp FROM dbo.Users u LEFT JOIN dbo.Tenants t ON t.Id = u.TenantId
+            WHERE u.UserCode = @c AND u.IsActive = 1 AND (u.TenantId IS NULL OR t.IsActive = 1)
+            """);
         return (Guid?)await cmd.With("@c", Normalize(userCode)).ExecuteScalarAsync(cancellationToken);
     }
 
@@ -113,6 +117,7 @@ public sealed class UserRepository(SqlConnectionFactory connections, Services.Au
             list.Add(new UserAccount
             {
                 Id = r.Get<Guid>("Id"),
+                RowVersion = r.Get<byte[]>("RowVersion"),
                 TenantId = r.IsDBNull(r.GetOrdinal("TenantId")) ? null : r.Get<Guid>("TenantId"),
                 UserCode = r.Get<string>("UserCode"),
                 DisplayName = r.Get<string>("DisplayName"),

@@ -18,6 +18,15 @@ public sealed class InvoiceDocumentService(
     public static readonly TimeSpan LinkLifetime = TimeSpan.FromDays(400);
     public static readonly TimeSpan ArchiveLinkLifetime = TimeSpan.FromDays(3700);
 
+    public static bool IsShareable(Invoice invoice) =>
+        invoice.Status is DocumentStatus.Sent or DocumentStatus.Acknowledged or DocumentStatus.Delivered or DocumentStatus.Accepted
+        && !string.IsNullOrWhiteSpace(invoice.DocumentNumber)
+        && !string.IsNullOrWhiteSpace(invoice.SignedXmlSha256)
+        && !string.IsNullOrWhiteSpace(invoice.ProviderReference)
+        && !invoice.ProviderReference.StartsWith("SBX-", StringComparison.OrdinalIgnoreCase)
+        && (invoice.IssuanceChannel != IssuanceChannel.GibPortal
+            || (invoice.PortalEnvironment == GibPortalEnvironment.Production && invoice.PortalEvidenceVerified));
+
     private static readonly Dictionary<string, string> Units = new(StringComparer.Ordinal)
     {
         ["C62"] = "Adet", ["NIU"] = "Adet", ["KGM"] = "Kg", ["GRM"] = "g", ["LTR"] = "Lt", ["MTR"] = "m", ["MTK"] = "m²", ["MTQ"] = "m³",
@@ -56,6 +65,9 @@ public sealed class InvoiceDocumentService(
     public async Task<Invoice?> LoadAsync(Guid tenantId, Guid invoiceId, CancellationToken ct) => await invoices.FindAsync(tenantId, invoiceId, ct);
 
     public Task<byte[]?> SignedXmlAsync(Invoice invoice, CancellationToken ct) => invoices.TryGetSignedXmlAsync(invoice, ct);
+
+    public async Task<bool> HasShareableEvidenceAsync(Invoice invoice, CancellationToken ct) =>
+        IsShareable(invoice) && await SignedXmlAsync(invoice, ct) is { Length: > 0 };
 
     public static string FileBaseName(Invoice invoice)
     {

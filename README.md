@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://www.bilhost.com/">
+  <a href="https://www.bilhost.com/panel/aff.php?aff=37">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="assets/branding/bilhost-logo-dark.svg">
       <img src="assets/branding/bilhost-logo.svg" alt="Bilhost" height="90">
@@ -7,9 +7,9 @@
   </a>
 </p>
 
-<h2 align="center">Projemiz <a href="https://www.bilhost.com/">Bilhost</a> tarafından desteklenmektedir.</h2>
+<h2 align="center">Projemiz <a href="https://www.bilhost.com/panel/aff.php?aff=37">Bilhost</a> tarafından desteklenmektedir.</h2>
 
-<p align="center"><a href="https://www.bilhost.com/"><b>www.bilhost.com</b></a></p>
+<p align="center"><a href="https://www.bilhost.com/panel/aff.php?aff=37"><b>www.bilhost.com</b></a></p>
 
 <br>
 
@@ -17,16 +17,15 @@
 
 # GIB Framework
 
-Gelir İdaresi Başkanlığı e-Fatura ve e-Arşiv süreçleri için çok amaçloı faturalama platformu.
+Gelir İdaresi Başkanlığı e-Fatura ve e-Arşiv süreçleri için çok amaçlı faturalama platformu.
 
-![.NET](https://img.shields.io/badge/.NET-9.0-512BD4?logo=dotnet&logoColor=white)
+![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet&logoColor=white)
 ![React](https://img.shields.io/badge/React-19-149ECA?logo=react&logoColor=white)
 ![SQL Server](https://img.shields.io/badge/SQL%20Server-2019%2B-CC2927?logo=microsoftsqlserver&logoColor=white)
-![Sürüm](https://img.shields.io/badge/s%C3%BCr%C3%BCm-5.2.1-0778E6)
+![Sürüm](https://img.shields.io/badge/s%C3%BCr%C3%BCm-5.5.1-0778E6)
 
-[Canlı demo](https://framework.hamzadenizyilmaz.com.tr) &nbsp;|&nbsp;
-[Swagger](https://framework.hamzadenizyilmaz.com.tr/swagger) &nbsp;|&nbsp;
-[ReDoc](https://framework.hamzadenizyilmaz.com.tr/redoc) &nbsp;|&nbsp;
+[Proje sitesi](https://framework.hamzadenizyilmaz.com.tr) &nbsp;|&nbsp;
+[API dokümantasyonu](#rest-api) &nbsp;|&nbsp;
 [Değişiklik günlüğü](CHANGELOG.md) &nbsp;|&nbsp;
 [Güvenlik](SECURITY.md)
 
@@ -41,7 +40,7 @@ Gelir İdaresi Başkanlığı e-Fatura ve e-Arşiv süreçleri için çok amaçl
 5. [Kurulum](#kurulum)
 6. [Demo hesapları](#demo-hesapları)
 7. [Roller ve yetkiler](#roller-ve-yetkiler)
-8. [Fatura yaşam döngüsü](#fatura-yaşam-döngüsü)
+8. [Fatura mimarisi](#fatura-mimarisi)
 9. [E-posta ve SMS bildirimleri](#e-posta-ve-sms-bildirimleri)
 10. [Pazaryeri ve e-ticaret entegrasyonları](#pazaryeri-ve-e-ticaret-entegrasyonları)
 11. [REST API](#rest-api)
@@ -108,7 +107,7 @@ flowchart LR
         HB[WHMCS / WISECP]
         CA[Özel uygulama]
     end
-    subgraph Uygulama["ASP.NET Core 9"]
+    subgraph Uygulama["ASP.NET Core 10"]
         API[REST API]
         HK[Webhook uç noktası]
         INV[Fatura servisi]
@@ -135,10 +134,10 @@ sistemlerdeki kesintiler fatura işlemini etkilemez.
 
 | Katman | Teknoloji |
 |---|---|
-| Uygulama | ASP.NET Core 9, ADO.NET (Microsoft.Data.SqlClient) |
+| Uygulama | ASP.NET Core 10 LTS, ADO.NET (Microsoft.Data.SqlClient) |
 | Veritabanı | SQL Server 2019 ve üzeri, Row-Level Security, tetikleyici tabanlı değişmezlik |
-| İmza | System.Security.Cryptography.Xml, Windows sertifika deposu veya PKCS#11 |
-| Panel | React 19, Vite, Bootstrap 5, Bootstrap Icons |
+| İmza | XAdES, Windows sertifika deposu ve GİB Portal imza akışı |
+| Panel | React 19, Vite 8, Bootstrap 5, Bootstrap Icons |
 | API dokümantasyonu | Swashbuckle (OpenAPI 3), ReDoc |
 | Barındırma | IIS (ASP.NET Core Module V2), Plesk, bağımsız win-x64 yayın |
 
@@ -146,24 +145,19 @@ sistemlerdeki kesintiler fatura işlemini etkilemez.
 
 ### Gereksinimler
 
-- Visual Studio 2022 (17.14 veya üzeri) ya da .NET 9 SDK
+- .NET 10 SDK 10.0.404 ve Node.js 24
 - SQL Server 2019 veya üzeri (geliştirme için SQL Server Express, `.\SQLEXPRESS`)
-- Node.js 20 veya üzeri
 
 ### Adımlar
 
-1. SQL Server Management Studio ile `database/GIBFramework_TamKurulum.sql` dosyasını çalıştırın. Script tekrar çalıştırılabilir;
-   mevcut bir veritabanını güncel şemaya yükseltir.
+1. Yerel temiz kurulum için SQL Server Management Studio ile `database/GIBFramework_TamKurulum.sql` dosyasını çalıştırın. Mevcut şema 4 kurulumunda `database/06_Sema5.sql` dosyasını uygulayın.
 2. `GIBFramework.sln` çözümünü açıp uygulamayı başlatın. Panel, derleme sırasında otomatik olarak derlenir ve uygulama
    `http://localhost:5097` adresinde açılır.
 
 Komut satırından:
 
 ```bash
-cd GIBFramework/ClientApp
-npm ci
-cd ..
-dotnet run --launch-profile http
+dotnet run --project GIBFramework/GIBFramework.csproj --launch-profile http
 ```
 
 Panel üzerinde anlık geliştirme için uygulama çalışırken:
@@ -175,7 +169,7 @@ npm run dev
 
 ## Demo hesapları
 
-Aşağıdaki hesaplar geliştirme ve demo ortamlarında otomatik oluşturulur; canlı ortamda oluşturulmaz.
+Aşağıdaki hesaplar yerel geliştirme ayarlarıyla oluşturulur. Ayrı `Demo` dağıtımında `Demo:Enabled` ve `Demo:Password` ortamdan verilir. Üretimde demo verisi devre dışıdır.
 
 | Kullanıcı kodu | Şifre | Rol |
 |---|---|---|
@@ -186,8 +180,7 @@ Aşağıdaki hesaplar geliştirme ve demo ortamlarında otomatik oluşturulur; c
 | `imza` | `GibDemo2026` | İmza yetkilisi, entegrasyon yöneticisi |
 | `denetci` | `GibDemo2026` | Arşiv denetçisi |
 
-Platform yöneticisi hesabı `admin` kullanıcı kodu ile oluşturulur; şifresi yapılandırmadaki `Bootstrap:AdminPassword`
-değeridir ve ilk girişte değiştirilmesi zorunludur.
+Boş veritabanında ilk platform yöneticisi `Bootstrap:AdminUserCode` ve `Bootstrap:AdminPassword` ayarlarıyla oluşturulur. Yerel yapılandırmada kullanıcı kodu `admin` ve ilk girişte şifre değişikliği etkindir.
 
 ## Roller ve yetkiler
 
@@ -224,7 +217,7 @@ Seçili yetki politikaları:
 
 Tam liste panelde **Ayarlar > Roller ve yetkiler** sayfasında yer alır.
 
-## Fatura Mimarisi
+## Fatura mimarisi
 
 ```mermaid
 stateDiagram-v2
@@ -316,11 +309,14 @@ Giden webhook gövdesi ve PHP, Node.js ve C# imza doğrulama örnekleri panelde 
 
 | Konu | Ayrıntı |
 |---|---|
-| Dokümantasyon | `/swagger`, `/redoc`, `/swagger/v1/swagger.json` |
+| Dokümantasyon | `Swagger:Enabled` etkin olduğunda `/swagger`, `/redoc`, `/swagger/v1/swagger.json` |
 | Kimlik doğrulama | `X-Api-Key` başlığı ile firma API anahtarı veya `Authorization: Bearer` ile JWT |
+| Kullanıcı işlemleri | Hesap, fatura onayı ve imzası ile GİB portalı Bearer oturumu gerektirir |
 | Tekrarlanabilirlik | Fatura oluşturma isteklerinde `Idempotency-Key` başlığı zorunludur |
 | Hata biçimi | RFC 7807 (`application/problem+json`), her yanıtta `X-Correlation-Id` |
 | Sayfalama | `GET /api/v1/invoices/page?take=50&skip=0` |
+| Özet ve görevler | `GET /api/v1/invoices/overview` ve `GET /api/v1/invoices/tasks/{task}` |
+| Sağlık | `/health` süreç canlılığını, `/health/ready` hazırlığı bildirir |
 
 ```bash
 curl -H "X-Api-Key: gfk_..." "https://framework.hamzadenizyilmaz.com.tr/api/v1/invoices/page?take=50"
@@ -344,11 +340,13 @@ Güvenlik açığı bildirimi için [SECURITY.md](SECURITY.md) dosyasına bakın
 
 ### Plesk (Windows Server 2019-2022-2025)
 
-Hazır yayın paketi bağımsız (self-contained, win-x64) olarak derlenir; sunucuda .NET çalışma zamanı gerekmez.
+Yayın bağımsız `win-x64` olarak derlenir. IIS için .NET 10 Hosting Bundle ile gelen ASP.NET Core Module V2 gerekir.
 
 ```bash
 dotnet publish GIBFramework/GIBFramework.csproj -c Release -r win-x64 --self-contained true -o publish/httpdocs
 ```
+
+Paylaşım arşivindeki `httpdocs/` uygulama dosyalarını, `database/` SQL betiklerini içerir. Plesk site köküne `httpdocs/` içeriğini kopyalayın. Üretim bağlantı dizesini ve JWT anahtarını sunucunun dağıtım ayarlarından verin.
 
 ### Ortamlar
 
@@ -356,22 +354,30 @@ dotnet publish GIBFramework/GIBFramework.csproj -c Release -r win-x64 --self-con
 |---|---|
 | `Development` | Yerel geliştirme |
 | `Demo` | Demo sitesi: demo hesaplar, test imza sertifikası, GİB test portalı |
-| `Production` | Canlı faturalama: mali mühür zorunlu, demo hesaplar ve geliştirme anahtarları devre dışı |
+| `Production` | Sertifika, UBL ve hazırlık koşulları tamamlandığında GİB e-Arşiv Portal üzerinden desteklenen e-Arşiv SATIS belgeleri |
 
-Canlı ortamda geliştirme değerleriyle (geliştirme anahtarı, test sertifikası, demo hesapları) uygulama başlatılmaz.
+IIS/Plesk uygulama havuzuna .NET 10 Hosting Bundle ile gelen ASP.NET Core Module V2 gerekir. Uygulama havuzunda `ASPNETCORE_ENVIRONMENT=Production` tanımlayın ve gizli değerleri dağıtım ortamından verin. Üretim ayarlarını tamamladıktan sonra HTTPS üzerinden `/health` ve `/health/ready` uçlarını doğrulayın. Sistem ekranı hazırlık nedenini ve denetim süresini gösterir.
+
+v5.2.1 yükseltmesinde uygulamayı durdurup şema 5'i uygulayın. API anahtarıyla çalışan istemciler `/api/v1/auth/permissions` ve atanmış makine işlemlerini kullanabilir. Hesap, fatura onayı, imza ve portal işlemleri için kullanıcı oturumu gerekir. Önceki portal kayıtlarının dış bağlantıları, yeni sürümde doğrulanmış düzenleme kanıtı gerektirir. IIS ve ters proxy erişim günlüklerinde `/f/` yollarındaki bağlantı belirteçlerini ve hassas sorgu dizelerini kaydetmeyin.
+
+Mevcut şema 4 veritabanında `database/06_Sema5.sql` dosyasını `ALTER ANY SECURITY POLICY` yetkisi olan veritabanı yöneticisi çalıştırır. Betik eksik firma satır güvenliği politikasını aynı işlemde kurar. Kurulumdan sonra `dbo.SchemaInfo` tablosundaki son sürüm 5 ve `dbo.TenantIsolation` politikası etkin olmalıdır.
 
 ### Yapılandırma
 
-Tüm ayarlar `appsettings.json` dosyasında tutulur. Uygulama ortamı `web.config` içindeki `ASPNETCORE_ENVIRONMENT` değeriyle belirlenir.
+Varsayılanlar `appsettings.json` dosyasındadır. Ortama özel değişkenlerde bölüm ayırıcı olarak çift alt çizgi kullanın. SQL için güvenilir TLS sertifikası, uygulama havuzu kimliği ve şema 5 gerekir. Kanıt ve Data Protection dizinlerine yalnızca uygulama havuzu kimliği ve yetkili operatörler erişebilmelidir.
 
 | Anahtar | Açıklama |
 |---|---|
 | `ConnectionStrings:GibFramework` | SQL Server bağlantı dizesi |
-| `Jwt:SigningKey` | En az 32 karakterlik gizli anahtar |
+| `Jwt:Issuer`, `Jwt:SigningKey` | Yerel JWT issuer ve en az 32 baytlık gizli anahtar |
 | `Bootstrap:AdminPassword` | İlk platform yöneticisi şifresi |
 | `App:PublicUrl` | E-posta, paylaşım ve pazaryeri bağlantılarında kullanılan genel adres |
-| `Signing:Mode`, `Signing:Thumbprint` | `WindowsStore` veya `Pkcs11` ve mali mühür parmak izi |
-| `GibPortal:AllowProduction` | Canlı GİB e-Arşiv Portal bağlantısı |
+| `Signing:Mode`, `Signing:TrustedRootSha256` | `WindowsStore` ve Windows güven deposundaki GİB zinciri köklerinin SHA-256 parmak izleri. İptal doğrulaması için güncel CRL/OCSP verisi gerekir. |
+| `Providers:PortalOnly`, `GibPortal:AllowProduction` | Canlı portal yayını için ikisini de `true` yapın. Portal oturumu ve SMS isteği için tek IIS işçi süreci kullanın. |
+| `Ubl:RequireSchemaValidation`, `Ubl:SchemaVersion`, `Ubl:SchemaDirectory`, `Ubl:SchemaSha256` | Onaylı UBL-TR XSD paketi. Dizin özetinde her satır `göreli/yol.xsd:SHA256` biçimindedir. Yollar ordinal sıralanır, özetler büyük harftir, satırlar LF ile birleştirilir ve UTF-8 metne SHA-256 uygulanır. |
+| `Ubl:SchematronPath`, `Ubl:SchematronSha256` | SVRL üreten bağımsız XSLT 1.0 şematron çıktısı ve dosyanın SHA-256 özeti |
+| `ReverseProxy:KnownProxies` | Tek hop için güvenilen proxy IP adresleri. Varsayılan loopback adresleri korunur. |
+| `OutboundNetwork:WebhookHosts`, `OutboundNetwork:SmtpHosts` | Firma tarafından seçilebilecek tam hedef adları. Ağ güvenlik duvarında da yalnızca izinli çıkışları açın. |
 | `Messaging:Smtp`, `Messaging:Sms` | Platform geneli varsayılan SMTP ve Netgsm ayarları |
 | `Swagger:Enabled` | API dokümantasyonunun canlı ortamda yayınlanması |
 
@@ -379,16 +385,18 @@ Tüm ayarlar `appsettings.json` dosyasında tutulur. Uygulama ortamı `web.confi
 
 | Dosya | İçerik |
 |---|---|
-| `00_Veritabani.sql` | Veritabanı oluşturma |
+| `00_Veritabani.sql` | Yerel `GIBFramework` veritabanını oluşturma ve seçme |
 | `01_Tablolar.sql` | Tablolar ve indeksler |
 | `02_Tetikleyiciler.sql` | Değişiklik ve silme engelleri |
-| `03_SatirGuvenligi.sql` | Row-Level Security politikaları |
+| `03_SatirGuvenligi.sql` | Temel firma satır güvenliği politikası |
 | `04_BaslangicVerileri.sql` | Şema sürümü, iller, duyurular |
 | `05_VergiDaireleri.sql` | GİB vergi daireleri (860 birim) |
-| `GIBFramework_TamKurulum.sql` | Tüm scriptlerin birleşik hali |
-| `GIBFramework_Plesk.sql` | Barındırma ortamları için, mevcut veritabanına kurulum |
+| `06_Sema5.sql` | Şema 4 → 5 yükseltmesi, eksik RLS kuralları ve kuyruk indeksleri |
+| `GIBFramework_TamKurulum.sql` | Yerel temiz kurulum için birleşik betik |
+| `GIBFramework_Plesk.sql` | Plesk'te seçili boş veritabanına temiz kurulum |
+| `Build-Kurulum.ps1` | Birleşik SQL dosyalarını numaralı kaynaklardan üretir |
 
-Tüm scriptler tekrar çalıştırılabilir. Şema sürümü uygulama başlangıcında doğrulanır.
+Numaralı kurulumda betikleri sırasıyla aynı hedef veritabanında çalıştırın. Yerel temiz kurulumda `00` ile başlayın. Sağlayıcının açtığı boş veritabanında `01` ile başlayın. Bir hata oluştuğunda yürütmeyi durdurun. `sqlcmd` ile çalıştırırken `-b` kullanın. Şema 5 yükseltmesi tek işlemde uygulanır. Uygulama başlangıcında şema sürümü doğrulanır.
 
 ## Proje yapısı
 
@@ -407,7 +415,6 @@ GIBFramework/
   Services/         Fatura, imza, UBL, PDF, mesajlaşma ve entegrasyon servisleri
   ClientApp/        React panel
 database/           SQL kurulum scriptleri
-deploy/plesk/       Plesk kurulum kılavuzu
 ```
 
 ## Lisans ve iletişim

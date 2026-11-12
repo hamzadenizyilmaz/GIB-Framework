@@ -179,11 +179,14 @@ internal sealed class SecurityOperationFilter : IOperationFilter
             {
                 [new OpenApiSecurityScheme { Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "Bearer" } }] = [],
             },
-            new OpenApiSecurityRequirement
+        ];
+        if (!metadata.OfType<IAuthorizeData>().Any(a => !string.IsNullOrWhiteSpace(a.AuthenticationSchemes)))
+        {
+            operation.Security.Add(new OpenApiSecurityRequirement
             {
                 [new OpenApiSecurityScheme { Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "ApiKey" } }] = [],
-            },
-        ];
+            });
+        }
 
         var policies = metadata.OfType<IAuthorizeData>().Select(a => a.Policy).Where(p => p is not null).Distinct().ToList();
         if (policies.Count > 0)
