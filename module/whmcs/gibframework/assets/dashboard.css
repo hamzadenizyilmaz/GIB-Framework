@@ -1,0 +1,90 @@
+.gibframework-dashboard {
+    --bs-body-font-family: system-ui, sans-serif;
+    --bs-body-color: #14243c;
+    --bs-primary-rgb: 19, 86, 156;
+    --bs-link-color-rgb: 19, 86, 156;
+    color: var(--bs-body-color);
+    font: 400 0.9375rem/1.5 var(--bs-body-font-family);
+    margin: 1.25rem auto;
+    max-width: 90rem;
+}
+
+.gibframework-dashboard .gib-heading {
+    background: #112742;
+    border-radius: 0.875rem;
+    color: #fff;
+    margin-bottom: 1rem;
+    padding: clamp(1rem, 2.5vw, 1.75rem);
+}
+
+.gibframework-dashboard .gib-heading h1 {
+    color: inherit;
+    font-size: clamp(1.375rem, 3vw, 2rem);
+    font-weight: 700;
+    margin: 0;
+}
+
+.gibframework-dashboard .gib-metric,
+.gibframework-dashboard .gib-invoices {
+    border-color: #dce5ef;
+    border-radius: 0.875rem;
+    box-shadow: 0 2px 6px #14243c0a;
+}
+
+.gibframework-dashboard .gib-metric {
+    background: #f7faff;
+    color: #314861;
+    padding: 1rem 1.125rem;
+}
+
+.gibframework-dashboard .gib-metric:hover {
+    border-color: #13569c;
+}
+
+.gibframework-dashboard .gib-metric strong {
+    color: #112742;
+    font-size: 1.625rem;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.25;
+    margin-top: 0.375rem;
+}
+
+.gibframework-dashboard .gib-toolbar,
+.gibframework-dashboard .gib-pagination {
+    padding: 1rem 1.125rem;
+}
+
+.gibframework-dashboard .gib-toolbar .form-control {
+    width: min(100%, 18rem);
+}
+
+.gibframework-dashboard .nav-pills {
+    --bs-nav-pills-link-active-bg: #13569c;
+}
+
+.gibframework-dashboard .btn-primary {
+    --bs-btn-bg: #13569c;
+    --bs-btn-border-color: #13569c;
+    --bs-btn-hover-bg: #0d4179;
+    --bs-btn-hover-border-color: #0d4179;
+}
+
+.gibframework-dashboard .table {
+    min-width: 47rem;
+}
+
+.gibframework-dashboard .table > :not(caption) > * > * {
+    padding: 0.75rem 1.125rem;
+}
+
+.gibframework-dashboard .table thead th {
+    background: #edf3f9;
+    color: #314861;
+    font-size: 0.8125rem;
+    white-space: nowrap;
+}
+
+.gibframework-dashboard :focus-visible {
+    outline: 2px solid #13569c;
+    outline-offset: 2px;
+}
