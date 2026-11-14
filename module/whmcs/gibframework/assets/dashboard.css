@@ -1,4 +1,5 @@
 .gibframework-dashboard {
+<<<<<<< Updated upstream
     --bs-body-font-family: system-ui, sans-serif;
     --bs-body-color: #14243c;
     --bs-primary-rgb: 19, 86, 156;
@@ -87,4 +88,264 @@
 .gibframework-dashboard :focus-visible {
     outline: 2px solid #13569c;
     outline-offset: 2px;
+=======
+    --gib-heading: Manrope, system-ui, sans-serif;
+    --gib-font: "DM Sans", system-ui, sans-serif;
+    --gib-radius: 12px;
+    --gib-control: 9px;
+    --gib-gutter: clamp(16px, 3.125vw, 54px);
+    --gib-shadow: 0 2px 9px rgb(123 104 84 / 6%);
+    --gib-forest: #1c3934;
+    --gib-forest-hover: #132b27;
+    --gib-ink: #181a2f;
+    --gib-muted: #665b59;
+    --gib-line: #e6d8ca;
+    --gib-bg: #faf7f1;
+    --gib-surface: #fffdfa;
+    --gib-hover: #f2ebe2;
+    --gib-rose: #f9edf0;
+    --gib-active: #a0182c;
+    --gib-input-border: #cdb5a3;
+    --gib-focus: #22665b;
+    --gib-link: var(--gib-forest);
+    --gib-success-text: #1c3934;
+    --gib-success-bg: #e2ede8;
+    --gib-warning-text: #74390e;
+    --gib-warning-bg: #faebdf;
+    --bs-body-color: var(--gib-ink);
+    --bs-body-bg: var(--gib-surface);
+    --bs-secondary-color: var(--gib-muted);
+    --bs-border-color: var(--gib-line);
+    background: var(--gib-bg);
+    border: 1px solid var(--gib-line);
+    border-radius: var(--gib-radius);
+    color: var(--gib-ink);
+    font: 400 15px/1.5 var(--gib-font);
+    min-width: 0;
+}
+
+@media (prefers-color-scheme: dark) {
+    .gibframework-dashboard {
+        color-scheme: dark;
+        --gib-ink: #f6eee6;
+        --gib-muted: #c3b5ae;
+        --gib-line: #4e413b;
+        --gib-bg: #1e1919;
+        --gib-surface: #292121;
+        --gib-hover: #372d2b;
+        --gib-rose: #492830;
+        --gib-active: #ff9aac;
+        --gib-input-border: #8c756a;
+        --gib-focus: #8bd1bf;
+        --gib-link: #8bd1bf;
+        --gib-success-text: #b2e7d8;
+        --gib-success-bg: #173832;
+        --gib-warning-text: #f9c9a4;
+        --gib-warning-bg: #472d21;
+    }
+}
+
+.gibframework-dashboard .gib-navbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 22px;
+    align-items: center;
+    min-height: 76px;
+    padding: 10px var(--gib-gutter);
+    border-bottom: 1px solid var(--gib-line);
+    border-radius: var(--gib-radius) var(--gib-radius) 0 0;
+    background: var(--gib-surface);
+}
+
+.gibframework-dashboard .gib-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    font: 600 20.6px/1.3 var(--gib-heading);
+    letter-spacing: -.32px;
+}
+
+.gibframework-dashboard .gib-brand strong { font-weight: 800; }
+.gibframework-dashboard .gib-brand img { display: block; flex: none; }
+
+.gibframework-dashboard .gib-sections {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.gibframework-dashboard .gib-sections a {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    min-height: 42px;
+    padding: .55rem .7rem;
+    border-radius: 10px;
+    color: var(--gib-ink);
+    font-size: .875rem;
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.gibframework-dashboard .gib-sections a:hover { background: var(--gib-hover); }
+.gibframework-dashboard .gib-sections a[aria-current] { color: var(--gib-active); background: var(--gib-rose); }
+.gibframework-dashboard .gib-sections a[aria-current]::after {
+    position: absolute;
+    inset: auto 12px 2px;
+    height: 2px;
+    border-radius: 2px;
+    background: currentColor;
+    content: "";
+}
+
+.gibframework-dashboard .gib-panel-link { margin-inline-start: auto; }
+.gibframework-dashboard .gib-content { padding: 28px var(--gib-gutter) 34px; min-width: 0; }
+.gibframework-dashboard :is(h1, h2, p) { margin: 0; }
+
+.gibframework-dashboard .gib-heading h1 {
+    color: var(--gib-ink);
+    font: 700 clamp(1.55rem, 2.23vw, 2rem)/1.2 var(--gib-heading);
+    letter-spacing: -.01em;
+}
+
+.gibframework-dashboard .gib-heading p,
+.gibframework-dashboard .gib-diagnostics p { margin-top: 5px; color: var(--gib-muted); }
+
+.gibframework-dashboard .gib-live {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    border: 1px solid var(--gib-line);
+    border-radius: 999px;
+    padding: 5px 10px;
+    background: var(--gib-hover);
+    color: var(--gib-muted);
+    font-size: .8rem;
+    font-weight: 650;
+}
+
+.gibframework-dashboard .gib-live.is-active { background: var(--gib-success-bg); color: var(--gib-success-text); }
+.gibframework-dashboard .gib-live::before { width: 7px; height: 7px; border-radius: 50%; background: currentColor; content: ""; }
+
+.gibframework-dashboard :is(.gib-metric, .gib-invoices) {
+    border: 1px solid var(--gib-line);
+    border-radius: var(--gib-radius);
+    background: var(--gib-surface);
+    box-shadow: var(--gib-shadow);
+    min-width: 0;
+    max-width: none;
+    margin: 0;
+}
+
+.gibframework-dashboard .gib-metric {
+    color: var(--gib-muted);
+    padding: clamp(12px, 2vw, 20px);
+    font: 750 .85rem/1.35 var(--gib-heading);
+    overflow-wrap: anywhere;
+}
+
+.gibframework-dashboard .gib-metric:hover { border-color: var(--gib-focus); }
+.gibframework-dashboard .gib-metric strong {
+    margin-top: 8px;
+    color: var(--gib-ink);
+    font: 750 clamp(1.4rem, 2.2vw, 2rem)/1.15 var(--gib-heading);
+    font-variant-numeric: tabular-nums;
+}
+
+.gibframework-dashboard :is(.gib-toolbar, .gib-pagination, .gib-diagnostics) { padding: 18px 20px; }
+.gibframework-dashboard h2 { color: var(--gib-ink); font: 700 1.03rem/1.35 var(--gib-heading); }
+
+.gibframework-dashboard .gib-toolbar .form-control {
+    width: min(100%, 20rem);
+    min-height: 40px;
+    border: 1px solid var(--gib-input-border);
+    border-radius: var(--gib-control);
+    background: var(--gib-surface);
+    color: var(--gib-ink);
+    font-size: .9rem;
+}
+
+.gibframework-dashboard .nav-pills .nav-link {
+    padding: 7px 10px;
+    border-radius: var(--gib-control);
+    color: var(--gib-ink);
+    font-size: .875rem;
+    font-weight: 650;
+}
+
+.gibframework-dashboard .nav-pills .nav-link:hover { background: var(--gib-hover); }
+.gibframework-dashboard .nav-pills .nav-link.active { background: var(--gib-rose); color: var(--gib-active); }
+
+.gibframework-dashboard .btn {
+    --bs-btn-border-radius: var(--gib-control);
+    min-height: 38px;
+    padding: 7px 13px;
+    font-size: .875rem;
+    font-weight: 650;
+    white-space: normal;
+}
+
+.gibframework-dashboard .btn-primary {
+    --bs-btn-bg: var(--gib-forest);
+    --bs-btn-border-color: var(--gib-forest);
+    --bs-btn-hover-bg: var(--gib-forest-hover);
+    --bs-btn-hover-border-color: var(--gib-forest-hover);
+    --bs-btn-disabled-bg: var(--gib-forest);
+    --bs-btn-disabled-border-color: var(--gib-forest);
+}
+
+.gibframework-dashboard .btn-outline-secondary {
+    --bs-btn-color: var(--gib-ink);
+    --bs-btn-bg: var(--gib-hover);
+    --bs-btn-border-color: var(--gib-line);
+    --bs-btn-hover-bg: var(--gib-surface);
+    --bs-btn-hover-color: var(--gib-ink);
+    --bs-btn-hover-border-color: var(--gib-input-border);
+}
+
+.gibframework-dashboard .table {
+    --bs-table-color: var(--gib-ink);
+    --bs-table-bg: var(--gib-surface);
+    --bs-table-border-color: var(--gib-line);
+    --bs-table-hover-color: var(--gib-ink);
+    --bs-table-hover-bg: var(--gib-hover);
+    min-width: 670px;
+    font-size: .875rem;
+}
+
+.gibframework-dashboard .table :is(th, td) { padding: .73rem .86rem; }
+.gibframework-dashboard .table thead th {
+    background: var(--gib-hover);
+    color: var(--gib-muted);
+    font-size: .8rem;
+    text-transform: none;
+    white-space: nowrap;
+}
+
+.gibframework-dashboard .table > tbody tr:nth-child(even) { --bs-table-bg: var(--gib-bg); }
+.gibframework-dashboard .table tbody tr:last-child > * { border-bottom: 0; }
+.gibframework-dashboard .gib-invoices > .table-responsive:last-child {
+    border-radius: 0 0 var(--gib-radius) var(--gib-radius);
+}
+.gibframework-dashboard .table a { color: var(--gib-link); font-weight: 650; text-underline-offset: 3px; }
+
+.gibframework-dashboard .badge { padding: .5em .85em; border-radius: 999px; font-weight: 650; }
+.gibframework-dashboard .text-bg-success,
+.gibframework-dashboard .alert-success { background: var(--gib-success-bg) !important; color: var(--gib-success-text) !important; border-color: var(--gib-line); }
+.gibframework-dashboard .text-bg-warning,
+.gibframework-dashboard .alert-warning { background: var(--gib-warning-bg) !important; color: var(--gib-warning-text) !important; border-color: var(--gib-line); }
+.gibframework-dashboard :is(.text-bg-info, .text-bg-secondary) { background: var(--gib-hover) !important; color: var(--gib-ink) !important; }
+
+.gibframework-dashboard .gib-request-table { min-width: 560px; }
+.gibframework-dashboard .gib-method { display: inline-block; min-width: 44px; color: var(--gib-link); }
+.gibframework-dashboard code { color: inherit; overflow-wrap: anywhere; }
+.gibframework-dashboard :focus-visible { outline: 2px solid var(--gib-focus); outline-offset: 2px; }
+.gibframework-dashboard .table-responsive:focus-visible { outline-offset: -2px; }
+
+@media (max-width: 575.98px) {
+    .gibframework-dashboard .gib-navbar { gap: 8px; }
+    .gibframework-dashboard .gib-brand { flex-basis: 100%; }
+    .gibframework-dashboard .gib-panel-link { margin-inline-start: 0; }
+    .gibframework-dashboard :is(.gib-toolbar, .gib-pagination, .gib-diagnostics) { padding: 14px; }
+>>>>>>> Stashed changes
 }

@@ -13,8 +13,14 @@ final class Queue
 {
     public const INVOICES = 'mod_gibframework_queue';
     public const STATE = 'mod_gibframework_state';
+<<<<<<< Updated upstream
     public const STATUSES = [
         'Taslak' => ['Draft', 'Validating', 'Validated', 'AwaitingApproval', 'Approved', 'Signing'],
+=======
+    public const REQUESTS = 'mod_gibframework_requests';
+    public const STATUSES = [
+        'Taslak' => ['Draft', 'Validating', 'Validated', 'AwaitingApproval'],
+>>>>>>> Stashed changes
         'İmzalı / iletimde' => ['Signed', 'Queued', 'Transmitting'],
         'Kesinleşen' => ['Sent', 'Acknowledged', 'Delivered', 'Accepted'],
         'İnceleme' => ['InDoubt', 'Rejected', 'Cancelled', 'Objected', 'Failed'],
@@ -70,7 +76,23 @@ final class Queue
                 $table->index(['check_due_at', 'invoice_id']);
             });
         }
+<<<<<<< Updated upstream
 
+=======
+        if (!$schema->hasTable(self::REQUESTS)) {
+            $schema->create(self::REQUESTS, static function ($table): void {
+                $table->engine = 'InnoDB';
+                $table->bigIncrements('id');
+                $table->unsignedBigInteger('invoice_id')->nullable();
+                $table->string('method', 4);
+                $table->string('endpoint', 90);
+                $table->unsignedSmallInteger('http_status');
+                $table->unsignedInteger('duration_ms');
+                $table->string('reason', 64)->nullable();
+                $table->unsignedBigInteger('requested_at');
+            });
+        }
+>>>>>>> Stashed changes
         $state = Capsule::table(self::STATE)->where('id', 1);
         $oldId = $schema->hasColumn(self::STATE, 'legacy_integration_id') ? (string) $state->value('legacy_integration_id') : '';
         if (FrameworkClient::isUuid($oldId)) {
@@ -85,8 +107,18 @@ final class Queue
         }
 
         Capsule::table('tbladdonmodules')->where('module', 'gibframework')->where('setting', 'legacyIntegrationId')->delete();
+<<<<<<< Updated upstream
         Capsule::table(self::STATE)->where('id', 1)->whereIn('reason', ['CONFIG_LEGACY_ID', 'LEGACY_INTEGRATION_CHANGED'])
             ->update(['reason' => null, 'next_at' => 0]);
+=======
+        Capsule::table(self::STATE)->where('id', 1)->whereIn('reason', ['CONFIG_LEGACY_ID', 'LEGACY_INTEGRATION_CHANGED', 'PORTAL_DISCONNECTED'])
+            ->update(['reason' => null, 'next_at' => 0]);
+        if (!$schema->hasColumn(self::STATE, 'last_cron_at')) {
+            $schema->table(self::STATE, static function ($table): void {
+                $table->unsignedBigInteger('last_cron_at')->nullable();
+            });
+        }
+>>>>>>> Stashed changes
     }
 
     public static function enqueue(int $id): void
@@ -99,14 +131,37 @@ final class Queue
     public static function run(array $settings): void
     {
         self::locked(static function () use ($settings): void {
+<<<<<<< Updated upstream
             if (!Capsule::schema()->hasColumn(self::INVOICES, 'delivery_key')) {
+=======
+            if (!Capsule::schema()->hasTable(self::REQUESTS) || !Capsule::schema()->hasColumn(self::STATE, 'last_cron_at')) {
+>>>>>>> Stashed changes
                 self::migrate();
             }
             self::process($settings);
             self::refreshStatuses($settings);
+<<<<<<< Updated upstream
         });
     }
 
+=======
+            $cutoff = Capsule::table(self::REQUESTS)->orderByDesc('id')->offset(999)->limit(1)->value('id');
+            if ($cutoff !== null) {
+                Capsule::table(self::REQUESTS)->where('id', '<', $cutoff)->delete();
+            }
+            Capsule::table(self::STATE)->where('id', 1)->update(['last_cron_at' => time()]);
+        });
+    }
+
+    public static function recordRequest(string $method, string $endpoint, int $status, int $duration, ?string $reason, ?int $invoiceId = null): void
+    {
+        Capsule::table(self::REQUESTS)->insert([
+            'invoice_id' => $invoiceId, 'method' => $method, 'endpoint' => $endpoint,
+            'http_status' => $status, 'duration_ms' => $duration, 'reason' => $reason, 'requested_at' => time(),
+        ]);
+    }
+
+>>>>>>> Stashed changes
     private static function locked(callable $work, bool $wait = false): void
     {
         $db = Capsule::connection();
@@ -154,9 +209,19 @@ final class Queue
         }
 
         $deadline = hrtime(true) + 50_000_000_000;
+<<<<<<< Updated upstream
         try {
             $client = new FrameworkClient($settings['frameworkUrl'] ?? '', ($settings['portalEnvironment'] ?? '') ?: 'Production');
             $targetId = $client->connectedTenant();
+=======
+        $invoiceId = null;
+        try {
+            $client = new FrameworkClient($settings['frameworkUrl'] ?? '', ($settings['portalEnvironment'] ?? '') ?: 'Production',
+                static function ($method, $path, $status, $duration, $reason) use (&$invoiceId): void {
+                    self::recordRequest($method, $path, $status, $duration, $reason, $invoiceId);
+                });
+            $targetId = $client->authorizedTenant(true);
+>>>>>>> Stashed changes
             if ($transfer->target_id !== null && $targetId !== $transfer->target_id) {
                 throw new DeliveryException('TARGET_TENANT_CHANGED', true, 300);
             }
@@ -171,10 +236,20 @@ final class Queue
                 break;
             }
             $id = (int) $row->invoice_id;
+<<<<<<< Updated upstream
+=======
+            $invoiceId = $id;
+>>>>>>> Stashed changes
             $entry = Capsule::table(self::INVOICES)->where('invoice_id', $id);
             try {
                 $source = Invoice::find($id);
                 if ($source === null || $source->status !== 'Paid' || (float) $source->total <= 0) {
+<<<<<<< Updated upstream
+=======
+                    if ($row->delivery_key !== null) {
+                        throw new DeliveryException('WHMCS_PAYMENT_CHANGED');
+                    }
+>>>>>>> Stashed changes
                     $entry->delete();
                     continue;
                 }
@@ -183,6 +258,12 @@ final class Queue
                     throw new DeliveryException('WHMCS_INVOICE_RESPONSE');
                 }
                 if (!InvoicePayload::isEligible($invoice)) {
+<<<<<<< Updated upstream
+=======
+                    if ($row->delivery_key !== null) {
+                        throw new DeliveryException('WHMCS_PAYMENT_CHANGED');
+                    }
+>>>>>>> Stashed changes
                     $entry->delete();
                     continue;
                 }
@@ -193,10 +274,24 @@ final class Queue
                 }
                 $currency = strtoupper((string) $source->getCurrencyCodeAttribute());
                 $rate = self::exchangeRate($settings['tryRates'] ?? '', $currency);
+<<<<<<< Updated upstream
                 $payload = InvoicePayload::create($invoice, $customer, $currency, $rate, self::taxId($customer, (int) ($settings['taxFieldId'] ?? 0)));
                 $key = $row->delivery_key ?? 'whmcs:' . $transfer->source_id . ':' . $id;
                 $response = $client->createDraft($payload, $key);
                 $entry->update(self::documentData($response) + ['draft_id' => strtolower($response['id']), 'submitted_at' => time(), 'reason' => null]);
+=======
+                $payload = InvoicePayload::create($invoice, $customer, $currency, $rate, self::taxId($customer, (int) ($settings['taxFieldId'] ?? 0)), $settings);
+                $key = $row->delivery_key ?? 'whmcs:' . $transfer->source_id . ':' . $id;
+                if ($row->delivery_key === null) {
+                    $entry->update(['delivery_key' => $key]);
+                }
+                $response = $client->createDraft($payload, $key);
+                $data = self::documentData($response);
+                if (in_array($response['status'], ['Draft', 'AwaitingApproval', 'Approved', 'Signing'], true)) {
+                    $data['check_due_at'] = 0;
+                }
+                $entry->update($data + ['draft_id' => strtolower($response['id']), 'submitted_at' => time(), 'reason' => null]);
+>>>>>>> Stashed changes
             } catch (DeliveryException $error) {
                 if ($error->pauseQueue) {
                     $state->update(['next_at' => time() + max(60, $error->retryAfter), 'reason' => $error->reason]);
@@ -221,8 +316,17 @@ final class Queue
         }
 
         $deadline = hrtime(true) + 20_000_000_000;
+<<<<<<< Updated upstream
         try {
             $client = new FrameworkClient($settings['frameworkUrl'] ?? '', '');
+=======
+        $invoiceId = null;
+        try {
+            $client = new FrameworkClient($settings['frameworkUrl'] ?? '', ($settings['portalEnvironment'] ?? '') ?: 'Production',
+                static function ($method, $path, $status, $duration, $reason) use (&$invoiceId): void {
+                    self::recordRequest($method, $path, $status, $duration, $reason, $invoiceId);
+                });
+>>>>>>> Stashed changes
             $target = Capsule::table(self::STATE)->where('id', 1)->value('target_id');
             if ($client->authorizedTenant() !== $target) {
                 throw new DeliveryException('TARGET_TENANT_CHANGED', true, 300);
@@ -236,14 +340,43 @@ final class Queue
             if (hrtime(true) >= $deadline) {
                 break;
             }
+<<<<<<< Updated upstream
             try {
                 $data = self::documentData($client->invoice($row->draft_id));
                 Capsule::table(self::INVOICES)->where('invoice_id', $row->invoice_id)->update($data);
+=======
+            $invoiceId = (int) $row->invoice_id;
+            $entry = Capsule::table(self::INVOICES)->where('invoice_id', $invoiceId);
+            try {
+                $document = $client->invoice($row->draft_id);
+                $entry->update(self::documentData($document));
+>>>>>>> Stashed changes
             } catch (DeliveryException $error) {
                 self::deferStatus($error->pauseQueue ? null : (int) $row->invoice_id, $error);
                 if ($error->pauseQueue) {
                     break;
                 }
+<<<<<<< Updated upstream
+=======
+                continue;
+            }
+            if (!in_array($document['status'], ['Draft', 'AwaitingApproval', 'Approved', 'Signing'], true)) {
+                continue;
+            }
+            if ($document['status'] === 'Signing' && ($document['issuanceChannel'] ?? '') === 'GibPortal'
+                && ($document['portalEnvironment'] ?? null) !== 'Test'
+                && empty($document['portalReconciliationRequired'])) {
+                continue;
+            }
+            try {
+                if (!Invoice::query()->paid()->whereKey($invoiceId)->where('total', '>', 0)->exists()) {
+                    throw new DeliveryException('WHMCS_PAYMENT_CHANGED');
+                }
+                $updated = $client->advance($document, $target);
+                $entry->update(self::documentData($updated));
+            } catch (DeliveryException $error) {
+                self::deferStatus($invoiceId, $error);
+>>>>>>> Stashed changes
             }
         }
     }

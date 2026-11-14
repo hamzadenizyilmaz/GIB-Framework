@@ -13,7 +13,11 @@ final class InvoicePayload
         return ($invoice['status'] ?? null) === 'Paid' && self::cents($invoice['total'] ?? null) > 0;
     }
 
+<<<<<<< Updated upstream
     public static function create(array $invoice, array $client, string $currency, ?float $rate, ?string $taxId): array
+=======
+    public static function create(array $invoice, array $client, string $currency, ?float $rate, ?string $taxId, array $settings = []): array
+>>>>>>> Stashed changes
     {
         if (!preg_match('/^[A-Z]{3}$/D', $currency) || ($currency !== 'TRY' && ($rate === null || !is_finite($rate) || $rate <= 0))) {
             throw new DeliveryException('INVOICE_EXCHANGE_RATE');
@@ -45,6 +49,25 @@ final class InvoicePayload
         $email = self::text($client['email'] ?? '', 200);
         $phone = self::text($client['phonenumber'] ?? '', 30);
         $taxId = $taxId !== '' ? $taxId : '11111111111';
+<<<<<<< Updated upstream
+=======
+        $store = self::text($settings['storeName'] ?? '', 100) ?: self::text(\WHMCS\Config\Setting::getValue('CompanyName'), 100);
+        $website = self::text($settings['storeUrl'] ?? '', 180) ?: self::text(\WHMCS\Config\Setting::getValue('SystemURL'), 180);
+        $notes = ['Fatura referans numarası: ' . $number];
+        if ($store !== '') {
+            $notes[] = 'Satış sitesi: ' . $store;
+        }
+        if (filter_var($website, FILTER_VALIDATE_URL) && preg_match('~^https?://~i', $website)
+            && !array_intersect(['user', 'pass', 'query', 'fragment'], array_keys(parse_url($website)))) {
+            $notes[] = 'Site adresi: ' . $website;
+        }
+        if (preg_match('/^\d{4}-\d{2}-\d{2}/', (string) ($invoice['datepaid'] ?? ''), $paid) && $paid[0] !== '0000-00-00') {
+            $notes[] = 'Ödeme tarihi: ' . $paid[0];
+        }
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/D', (string) ($invoice['date'] ?? '')) && $invoice['date'] !== '0000-00-00') {
+            $notes[] = 'Sipariş fatura tarihi: ' . $invoice['date'];
+        }
+>>>>>>> Stashed changes
 
         return [
             'orderNumber' => self::text($number, 50),
@@ -66,7 +89,11 @@ final class InvoicePayload
                 'phone' => $phone === '' ? null : $phone,
             ],
             'lines' => self::lines($invoice),
+<<<<<<< Updated upstream
             'notes' => [sprintf('WHMCS fatura no: %s (ID: %d)', $number, $invoice['invoiceid'])],
+=======
+            'notes' => $notes,
+>>>>>>> Stashed changes
             'saveCustomer' => false,
         ];
     }

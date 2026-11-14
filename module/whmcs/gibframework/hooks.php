@@ -33,7 +33,11 @@ add_hook('AfterCronJob', 1, static function (): void {
             Queue::run($settings);
         }
     } catch (Throwable) {
+<<<<<<< Updated upstream
         logActivity('GIB Framework: Taslak kuyruğu çalıştırılamadı. WHMCS modül kurulumunu ve veritabanını kontrol edin.');
+=======
+        logActivity('GIB Framework: Fatura kuyruğu çalıştırılamadı. WHMCS modül kurulumunu ve veritabanını kontrol edin.');
+>>>>>>> Stashed changes
     }
 });
 
