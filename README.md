@@ -23,6 +23,7 @@ Gelir İdaresi Başkanlığı e-Fatura ve e-Arşiv süreçleri için çok amaçl
 ![React](https://img.shields.io/badge/React-19-149ECA?logo=react&logoColor=white)
 ![SQL Server](https://img.shields.io/badge/SQL%20Server-2019%2B-CC2927?logo=microsoftsqlserver&logoColor=white)
 ![Sürüm](https://img.shields.io/badge/s%C3%BCr%C3%BCm-6.0.0-0778E6)
+![Uyarı](https://img.shields.io/badge/canl%C4%B1%20kullan%C4%B1m-%C3%B6n%20do%C4%9Frulama%20gerekir-C0392B)
 
 [Proje sitesi](https://framework.hamzadenizyilmaz.com.tr) &nbsp;|&nbsp;
 [API dokümantasyonu](#rest-api) &nbsp;|&nbsp;
@@ -32,18 +33,53 @@ Gelir İdaresi Başkanlığı e-Fatura ve e-Arşiv süreçleri için çok amaçl
 
 </div>
 
-> [!WARNING]
-> ### ⚠️ Önemli Uyarı — Geliştirme ve Kullanım Koşulları
+> [!CAUTION]
+> ### ⚠️ ÖNEMLİ: PROJE DURUMU, RESMÎ BAĞLANTI VE CANLI KULLANIM
 >
-> **GIB Framework bağımsız bir yazılım projesidir; Gelir İdaresi Başkanlığı'nın (GİB) resmî yazılımı değildir ve herhangi bir resmî onay veya destek iddiası taşımaz.**
+> **GIB Framework, Gelir İdaresi Başkanlığı (GİB) tarafından geliştirilen, yayımlanan, onaylanan veya resmî olarak desteklenen bir yazılım değildir.** GİB adı ve ilgili teknik terimler, yalnızca projenin hedeflediği e-belge süreçlerini tanımlamak için kullanılmaktadır.
 >
-> Proje geliştirme ve doğrulama çalışmaları kapsamında sunulmaktadır. Belgelenen özellikler, güvenlik mekanizmaları ve GİB entegrasyonları tek başına üretim ortamına uygunluk garantisi oluşturmaz. **Gerekli güvenlik testleri, güncel mevzuat kontrolleri, entegrasyon yetkilendirmeleri ve uçtan uca doğrulamalar tamamlanmadan gerçek mükellef verileriyle veya canlı e-Fatura/e-Arşiv işlemlerinde kullanmayın.**
+> **Bu depoda kod, özellik açıklaması, örnek yapılandırma veya kurulum talimatı bulunması; sistemin güvenli, hatasız, mevzuata uygun ya da canlı ortamda kullanıma hazır olduğunun kanıtı değildir.**
 >
-> Demo hesapları ve örnek kimlik bilgileri yalnızca test içindir; canlı ortamlarda kullanılmamalıdır. Kullanım öncesinde [kurulum](install.md), [güvenlik](SECURITY.md) ve lisans bilgilerini inceleyin.
+> **Gerekli bağımsız kontroller tamamlanmadan gerçek mükellef/müşteri verileriyle işlem yapmayın; gerçek e-Fatura veya e-Arşiv belgesi düzenlemeyin, imzalamayın ya da göndermeyin.** İlk denemeleri izole bir geliştirme/test ortamında ve sentetik verilerle yapın.
+>
+> Bu uyarının tamamını ve [canlıya geçiş kontrol listesini](#canlıya-geçiş-öncesi-kontrol-listesi) okuyun.
+
+## Önemli uyarı ve kullanım sorumluluğu
+
+### 1. Projenin kapsamı ve resmî statüsü
+
+GIB Framework, e-Fatura ve e-Arşiv süreçlerine yönelik bağımsız bir yazılım çalışmasıdır. **Gelir İdaresi Başkanlığı ile resmî ortaklık, akreditasyon, sertifikasyon, onay veya yetkilendirme iddiası taşımaz.** Depoda GİB, UBL-TR, e-Fatura, e-Arşiv, mali mühür ve benzeri adların kullanılması bu statüyü değiştirmez.
+
+### 2. Geliştirme durumu ve doğrulama sınırları
+
+README'de belirtilen özellikler, mimari bileşenler, sürüm numarası, güvenlik kontrolleri ve entegrasyon akışları **üretim uygunluğu taahhüdü değildir**. Bir özelliğin belgelenmiş veya uygulanmış olması, bütün senaryolarda doğrulandığı anlamına gelmez. Yeni sürümler veya yapılandırmalar mevcut davranışı değiştirebilir.
+
+### 3. Mevzuat, e-belge geçerliliği ve resmî süreçler
+
+Vergi mevzuatı, belge düzenleme kuralları, UBL-TR/XSD/Schematron gereklilikleri, elektronik imza ve mali mühür koşulları, GİB servisleri ve yetkilendirme yöntemleri zaman içinde değişebilir. **Gerçek belge düzenleme veya gönderim öncesinde yürürlükteki resmî gereklilikler ile ilgili mükellef/entegrasyon yetkilerini ayrıca doğrulayın.** Gerekli durumlarda yetkili mali müşavir, hukukçu veya ilgili uzmanlardan görüş alın. Bu dokümantasyon vergisel ya da hukuki danışmanlık yerine geçmez.
+
+### 4. Güvenlik, kişisel veriler ve gizli bilgiler
+
+- **Gerçek müşteri, mükellef, vergi kimlik, iletişim veya fatura verilerini** doğrulanmamış geliştirme/demo ortamlarına aktarmayın.
+- Demo kullanıcıları, yayımlanmış örnek parolalar, API anahtarları, JWT sırları, bağlantı dizeleri ve sertifikalar **canlı ortamda kullanılmamalıdır**. Canlı ortam için benzersiz ve güçlü gizli bilgiler oluşturun; gerekenleri güvenli kanallarda yönetin ve döndürün.
+- İnternete açık dağıtımdan önce kimlik doğrulama, yetkilendirme, firma veri izolasyonu, API/webhook güvenliği, denetim kayıtları, TLS, yedekleme ve geri yükleme süreçlerini bağımsız olarak test edin.
+- Kişisel verilerin işlenmesi, saklanması, aktarılması ve silinmesine ilişkin geçerli yükümlülükleri; erişim yetkilerini, saklama sürelerini ve olay müdahale süreçlerini ayrıca değerlendirin.
+
+### 5. Haricî servisler, mali işlemler ve operasyonel riskler
+
+GİB portalı, pazaryerleri, SMTP, SMS, ödeme dışı faturalama akışları, webhook uç noktaları ve diğer üçüncü taraf bağlantılarında servis değişiklikleri, erişim sorunları veya beklenmeyen yanıtlar oluşabilir. **Başarılı API yanıtı veya PDF/XML üretimi, belgenin hukuken geçerli olduğunu ya da ilgili kurum tarafından kabul edildiğini tek başına kanıtlamaz.** Gerçek işlemlerden önce uçtan uca kabul, ret, iptal, tekrar deneme, mükerrer kayıt ve arşivleme senaryolarını doğrulayın.
+
+### 6. Kullanım kararı ve sorumluluk
+
+Bu depoyu inceleyen, kuran, değiştiren veya kullanan kişi ve kuruluşlar; kendi ortamlarının güvenlik, mevzuat, veri koruma, işletim ve entegrasyon gerekliliklerini değerlendirmekle sorumludur. **Kaynak kodun kamuya açık olması, resmî onay veya koşulsuz kullanım/dağıtım hakkı anlamına gelmez.** Hak sahipliği ve kullanım koşulları için [Lisans ve iletişim](#lisans-ve-iletişim) bölümünü inceleyin.
+
+> [!IMPORTANT]
+> **Önerilen başlangıç:** Önce [kurulum kılavuzunu](install.md) ve [güvenlik politikasını](SECURITY.md) inceleyin. Yerel testleri sentetik verilerle gerçekleştirin. Gerçek veriler ve canlı GİB işlemleri için aşağıdaki kontrol listesindeki gereklilikleri ayrı ayrı doğrulayın.
 
 ## İçindekiler
 
-1. [Genel bakış](#genel-bakış)
+1. [Önemli uyarı ve kullanım sorumluluğu](#önemli-uyarı-ve-kullanım-sorumluluğu)
+2. [Genel bakış](#genel-bakış)
 2. [Özellikler](#özellikler)
 3. [Mimari](#mimari)
 4. [Teknoloji yığını](#teknoloji-yığını)
@@ -174,6 +210,9 @@ dotnet run --project GIBFramework/GIBFramework.csproj --launch-profile http
 | `muhasebe` | `GibDemo2026` | Muhasebeci, fatura hazırlayan |
 | `imza` | `GibDemo2026` | İmza yetkilisi, entegrasyon yöneticisi |
 | `denetci` | `GibDemo2026` | Arşiv denetçisi |
+
+> [!CAUTION]
+> **Bu tabloda yayımlanan parola yalnızca demo/test amaçlıdır.** Aynı parolayı canlı ortamda kullanmayın; paylaşılan kimlik bilgilerini gerçek verilerle çalışan hiçbir sistemde etkin bırakmayın.
 
 **Canlı demo durumu:** Son kontrolde site `yonetici` için bu parolayla girişi reddetti. Tablo, v6.0.0 sürümünde yayımlanan demo bilgilerini gösterir.
 
@@ -338,6 +377,23 @@ curl -H "X-Api-Key: gfk_..." "https://framework.hamzadenizyilmaz.com.tr/api/v1/i
 Güvenlik açığı bildirimi için [SECURITY.md](SECURITY.md) dosyasına bakın.
 
 ## Canlı ortama alma
+
+> [!WARNING]
+> **Bu bölümdeki dağıtım komutları tek başına canlı kullanım onayı değildir.** Aşağıdaki gereklilikler hedef ortam, güncel mevzuat ve kuruluşunuzun ihtiyaçları için ayrıca doğrulanmalıdır.
+
+### Canlıya geçiş öncesi kontrol listesi
+
+- [ ] Gerekli GİB başvuru, erişim, yetkilendirme ve e-belge süreçlerinin güncelliği kontrol edildi.
+- [ ] Desteklenen belge tipleri, UBL-TR şema/şematron kuralları, imza ve mühür zinciri gerçekçi test senaryolarıyla doğrulandı.
+- [ ] Faturanın oluşturulması, onayı, imzalanması, gönderimi, kabul/ret yanıtları, iptali ve arşivlenmesi uçtan uca sınandı.
+- [ ] Kimlik doğrulama, MFA, rol/yetki sınırları ve firmalar arası veri izolasyonu test edildi.
+- [ ] Gizli bilgiler güvenli şekilde sağlandı; demo hesapları ve varsayılan/örnek parolalar canlı ortamdan kaldırıldı veya değiştirildi.
+- [ ] HTTPS/TLS, sertifikalar, güvenilir proxy ayarları, ağ çıkışları, güvenlik duvarı, günlükleme ve sır maskeleme denetlendi.
+- [ ] API, webhook ve üçüncü taraf entegrasyonlarında imza doğrulama, idempotency, hız sınırı ve hata/tekrar deneme davranışı sınandı.
+- [ ] Veritabanı şema/migrasyon durumu, yedekleme, geri yükleme ve felaket kurtarma prosedürleri doğrulandı.
+- [ ] Kişisel veri ve belge saklama yükümlülükleri, erişim denetimleri ve olay müdahale süreçleri değerlendirildi.
+- [ ] İzleme, alarm, işlem mutabakatı, başarısız gönderimlerin yeniden işlenmesi ve operasyonel sahiplik belirlendi.
+- [ ] Test sonuçları kayıt altına alındı; kalan riskler değerlendirilerek yetkili sorumlularca canlıya geçiş kararı verildi.
 
 ### Plesk (Windows Server 2019-2022-2025)
 
