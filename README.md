@@ -155,16 +155,20 @@ dotnet run --project GIBFramework/GIBFramework.csproj --launch-profile http
 
 ## Demo hesapları
 
-Geliştirme veya demo ortamında `Demo:Enabled` etkinleştirildiğinde aşağıdaki hesaplar, operatörün belirlediği `Demo:Password` ile oluşturulur.
+[Demo giriş ekranı](https://framework.hamzadenizyilmaz.com.tr/app/#/login)
 
-| Kullanıcı kodu | Rol |
-|---|---|
-| `yonetici` | Genel Müdür / CEO |
-| `firmaadmin` | Firma yöneticisi |
-| `onay` | Muhasebe müdürü |
-| `muhasebe` | Muhasebeci, fatura hazırlayan |
-| `imza` | İmza yetkilisi, entegrasyon yöneticisi |
-| `denetci` | Arşiv denetçisi |
+| Kullanıcı kodu | Yayımlanan demo parolası | Rol |
+|---|---|---|
+| `yonetici` | `GibDemo2026` | Genel Müdür / CEO |
+| `firmaadmin` | `GibDemo2026` | Firma yöneticisi |
+| `onay` | `GibDemo2026` | Muhasebe müdürü |
+| `muhasebe` | `GibDemo2026` | Muhasebeci, fatura hazırlayan |
+| `imza` | `GibDemo2026` | İmza yetkilisi, entegrasyon yöneticisi |
+| `denetci` | `GibDemo2026` | Arşiv denetçisi |
+
+**Canlı demo durumu:** Son kontrolde site `yonetici` için bu parolayla girişi reddetti. Tablo, v6.0.0 sürümünde yayımlanan demo bilgilerini gösterir.
+
+Kendi demo kurulumunuzda `Development` veya `Demo` ortamını kullanın. `Demo:Enabled` ayarını etkinleştirip `Demo:Password` değerini belirlediğinizde uygulama eksik demo hesaplarını oluşturur. Var olan hesapların parolaları korunur. [Demo kurulum adımları](install.md#isteğe-bağlı-demo-ve-panel-geliştirme)
 
 Boş veritabanında ilk platform yöneticisi `Bootstrap:AdminUserCode` ve `Bootstrap:AdminPassword` ayarlarıyla oluşturulur. Yerel yapılandırmada kullanıcı kodu `admin` ve ilk girişte şifre değişikliği etkindir.
 
