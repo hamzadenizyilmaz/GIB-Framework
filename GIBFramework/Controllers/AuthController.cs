@@ -17,7 +17,7 @@ public sealed class AuthController(AuthService auth) : ControllerBase
     [EnableRateLimiting(LoginRateLimitPolicy)]
     public async Task<IActionResult> Login([FromBody] LoginRequest request, CancellationToken ct)
     {
-        var result = await auth.LoginAsync(request.UserCode, request.Password, request.TotpCode, ct);
+        var result = await auth.LoginAsync(request.UserCode, request.Password, request.TotpCode, HttpContext.Connection.RemoteIpAddress, ct);
         return result.Outcome switch
         {
             LoginOutcome.Success => Ok(new LoginResponse(result.Token!.AccessToken, "Bearer", result.Token.ExpiresAt, result.User!)),
@@ -131,6 +131,13 @@ public sealed class UsersController(UserAdminService users) : ControllerBase
     [HttpPatch("{id:guid}")]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateUserRequest request, CancellationToken ct) =>
         Ok(await users.UpdateAsync(id, new UserChanges(request.Roles, request.IsActive, request.DisplayName, request.Email, request.Phone), ct));
+
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
+    {
+        await users.UpdateAsync(id, new UserChanges(null, false, null, null, null), ct, removeAccess: true);
+        return NoContent();
+    }
 
     [HttpPost("{id:guid}/reset-password")]
     public async Task<IActionResult> ResetPassword(Guid id, [FromBody] ResetPasswordRequest request, CancellationToken ct) =>

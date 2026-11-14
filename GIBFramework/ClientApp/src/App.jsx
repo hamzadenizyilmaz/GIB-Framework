@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router';
 import { MFA_REQUIRED_EVENT, PASSWORD_CHANGE_EVENT } from './api.js';
 import { AnnouncementPopup } from './components/AnnouncementPopup.jsx';
@@ -19,13 +19,10 @@ import { Tenants } from './pages/Tenants.jsx';
 import { Announcements } from './pages/Announcements.jsx';
 import { Customers } from './pages/Customers.jsx';
 import { Products } from './pages/Products.jsx';
-import { Developers } from './pages/Developers.jsx';
 import { SettingsHub, SettingsShell } from './pages/settings/SettingsLayout.jsx';
-import { SecuritySettings } from './pages/settings/SecuritySettings.jsx';
+import { IpAccessSettings, SecuritySettings } from './pages/settings/SecuritySettings.jsx';
 import { AppearanceSettings } from './pages/settings/AppearanceSettings.jsx';
 import { CertificateSettings, SystemSettings } from './pages/settings/SystemSettings.jsx';
-import { EmailSettings, MessageLogSettings, SmsSettings, TemplateSettings } from './pages/settings/MessagingSettings.jsx';
-import { IntegrationDetailSettings, IntegrationSettings } from './pages/settings/IntegrationSettings.jsx';
 import { CompanySettings } from './pages/settings/CompanySettings.jsx';
 import { BankAccountSettings, InvoiceDefaultsSettings, NoteTemplateSettings, NumberingSettings } from './pages/settings/InvoiceSettings.jsx';
 import { RolesSettings, UsersSettings } from './pages/settings/TeamSettings.jsx';
@@ -35,6 +32,13 @@ import { GibDocuments } from './pages/GibDocuments.jsx';
 
 const MFA_PAGE = '/settings/account';
 const ACTIVITY_EVENTS = ['mousedown', 'keydown', 'touchstart', 'wheel'];
+const Developers = lazy(() => import('./pages/Developers.jsx').then((module) => ({ default: module.Developers })));
+const EmailSettings = lazy(() => import('./pages/settings/MessagingSettings.jsx').then((module) => ({ default: module.EmailSettings })));
+const SmsSettings = lazy(() => import('./pages/settings/MessagingSettings.jsx').then((module) => ({ default: module.SmsSettings })));
+const TemplateSettings = lazy(() => import('./pages/settings/MessagingSettings.jsx').then((module) => ({ default: module.TemplateSettings })));
+const MessageLogSettings = lazy(() => import('./pages/settings/MessagingSettings.jsx').then((module) => ({ default: module.MessageLogSettings })));
+const IntegrationSettings = lazy(() => import('./pages/settings/IntegrationSettings.jsx').then((module) => ({ default: module.IntegrationSettings })));
+const IntegrationDetailSettings = lazy(() => import('./pages/settings/IntegrationSettings.jsx').then((module) => ({ default: module.IntegrationDetailSettings })));
 
 function useIdleLogout() {
   const session = useSession();
@@ -79,12 +83,15 @@ function Guard({ policy, children }) {
       <Link className="btn btn-outline-secondary" to="/">Ana sayfaya dön</Link>
     </div></Layout>;
   }
-  return <Layout>{children}</Layout>;
+  return <Layout><Suspense fallback={<Spinner />}>{children}</Suspense></Layout>;
 }
 
 export default function App() {
   const session = useSession();
   const navigate = useNavigate();
+  const location = useLocation();
+  const from = location.state?.from;
+  const afterLogin = typeof from === 'string' && /^\/(?!\/)/.test(from) ? from : '/';
 
   useIdleLogout();
 
@@ -116,7 +123,7 @@ export default function App() {
   return (
     <>
       <Routes>
-        <Route path="/login" element={session.permissions ? <Navigate to="/" replace /> : <Login />} />
+        <Route path="/login" element={session.permissions ? <Navigate to={afterLogin} replace /> : <Login />} />
         <Route path="/change-password" element={<Guard><ChangePassword /></Guard>} />
         <Route path="/account" element={<Navigate to="/settings/account" replace />} />
         <Route path="/" element={<Guard><Dashboard /></Guard>} />
@@ -139,7 +146,8 @@ export default function App() {
         <Route path="/settings/api-keys" element={<Guard policy="ApiKeyManage"><ApiKeySettings /></Guard>} />
         <Route path="/settings/locations" element={<Guard><LocationSettings /></Guard>} />
         <Route path="/settings/account" element={<Guard><InSettings><Account /></InSettings></Guard>} />
-        <Route path="/settings/security" element={<Guard><SecuritySettings /></Guard>} />
+        <Route path="/settings/security" element={<Guard policy="SecurityManage"><SecuritySettings /></Guard>} />
+        <Route path="/settings/security/ip-access" element={<Guard policy="IpAccessManage"><IpAccessSettings /></Guard>} />
         <Route path="/settings/certificate" element={<Guard><CertificateSettings /></Guard>} />
         <Route path="/settings/appearance" element={<Guard><AppearanceSettings /></Guard>} />
         <Route path="/settings/system" element={<Guard policy="SystemRead"><SystemSettings /></Guard>} />
@@ -165,7 +173,8 @@ export default function App() {
         <Route path="/announcements" element={<Navigate to="/settings/announcements" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
-      <AnnouncementPopup trigger={session.permissions?.userId || 'anonymous'} />
+      {session.permissions && !session.permissions.mustChangePassword && !session.permissions.mfaRequired
+        && <AnnouncementPopup trigger={session.permissions.userId} />}
     </>
   );
 }

@@ -62,6 +62,10 @@ public sealed class TenantsController(ITenantRepository tenants, IAuditTrail aud
         p.PostalCode = CustomersController.Clean(request.PostalCode);
         p.Email = CustomersController.Clean(request.Email);
         p.Phone = CustomersController.Clean(request.Phone);
+        p.Fax = request.Fax is null ? p.Fax : CustomersController.Clean(request.Fax);
+        p.Website = request.Website is null ? p.Website : CustomersController.Clean(request.Website);
+        p.TradeRegistryNumber = request.TradeRegistryNumber is null ? p.TradeRegistryNumber : CustomersController.Clean(request.TradeRegistryNumber);
+        p.MersisNumber = request.MersisNumber is null ? p.MersisNumber : CustomersController.Clean(request.MersisNumber);
         p.IsEFaturaRegistered = request.IsEFaturaRegistered;
         p.IsEArchiveRegistered = request.IsEArchiveRegistered;
         tenant.EFaturaPrefix = request.EFaturaPrefix;
@@ -176,12 +180,16 @@ public sealed class IncomingInvoicesController(IncomingInvoiceService service) :
 [Authorize(Policy = Policies.AuditRead)]
 public sealed class AuditController(IAuditTrail audit, ITenantContext context) : ControllerBase
 {
+    private Guid AuditTenant => context.TenantId ?? (User.IsInRole(Roles.PlatformSuperAdmin) ? Guid.Empty : context.RequireTenant());
+
     [HttpGet("events")]
-    public async Task<IActionResult> Events([FromQuery] string? entityId, [FromQuery] int take = 100, [FromQuery] long? before = null, CancellationToken ct = default) =>
-        Ok(await audit.ListAsync(context.RequireTenant(), entityId, take, before, ct));
+    public async Task<IActionResult> Events([FromQuery] string? entityId, [FromQuery] string? userId, [FromQuery] string? action,
+        [FromQuery] string? role, [FromQuery] DateTimeOffset? from, [FromQuery] DateTimeOffset? until, [FromQuery] string? result,
+        [FromQuery] int take = 100, [FromQuery] long? before = null, CancellationToken ct = default) =>
+        Ok(await audit.ListAsync(AuditTenant, entityId, take, before, ct, userId, action, role, from, until, result));
 
     [HttpGet("verify")]
-    public async Task<IActionResult> Verify(CancellationToken ct) => Ok(await audit.VerifyAsync(context.RequireTenant(), ct));
+    public async Task<IActionResult> Verify(CancellationToken ct) => Ok(await audit.VerifyAsync(AuditTenant, ct));
 }
 
 [ApiController]

@@ -4,7 +4,7 @@ import { api } from '../../api.js';
 import { fmtDate } from '../../format.js';
 import { useSession } from '../../session.jsx';
 import { BusyButton, Card, ErrorAlert, Spinner, useDialogs, useLoad, useToast } from '../../components/ui.jsx';
-import { SettingsLayout, TenantRequired } from './SettingsLayout.jsx';
+import { SettingsLayout } from './SettingsLayout.jsx';
 
 const SESSION_OPTIONS = [30, 60, 120, 240, 480, 720, 1440];
 const IDLE_OPTIONS = [0, 5, 10, 15, 30, 60, 120, 240];
@@ -149,10 +149,88 @@ function SecurityForm() {
   );
 }
 
+export function IpAccessSettings() {
+  const toast = useToast();
+  const { data, loading, error, reload } = useLoad(() => api.get('/api/v1/settings/ip-access'), []);
+  const [form, setForm] = useState(null);
+  const [entry, setEntry] = useState('');
+  const [kind, setKind] = useState('allow');
+  const [entryError, setEntryError] = useState('');
+  useEffect(() => {
+    if (data) setForm({ enabled: Boolean(data.enabled), allow: data.allow || [], deny: data.deny || [] });
+  }, [data]);
+  const save = async () => {
+    const result = await api.put('/api/v1/settings/ip-access', form);
+    setForm({ enabled: result.enabled, allow: result.allow, deny: result.deny });
+    toast('IP erişim ayarları kaydedildi.');
+  };
+  const add = (event) => {
+    event.preventDefault();
+    const value = entry.trim();
+    if (!value) return;
+    if (form.allow.includes(value) || form.deny.includes(value)) {
+      setEntryError('Bu adres zaten listede.');
+      return;
+    }
+    setForm({ ...form, [kind]: [...form[kind], value] });
+    setEntry('');
+    setEntryError('');
+  };
+  const rules = form ? [...form.allow.map((value) => ({ value, kind: 'allow' })), ...form.deny.map((value) => ({ value, kind: 'deny' }))] : [];
+
+  return <SettingsLayout icon="shield" title="IP Erişimi" parent={['Güvenlik politikası', '/settings/security']}
+    subtitle={data?.scope === 'Platform' ? 'Site genelinde geçerli kurallar' : 'Firmanızın panel ve API erişim kuralları'}
+    actions={form && <BusyButton className="btn btn-primary" onClick={save}>IP ayarlarını kaydet</BusyButton>}>
+  <Card title="İzin ve engel listeleri">
+    <ErrorAlert error={error} />
+    {error && <BusyButton className="btn btn-outline-secondary" onClick={reload}>Tekrar dene</BusyButton>}
+    {loading && <Spinner />}
+    {form && <>
+      <div className="form-check form-switch mb-3">
+        <input id="ip-active" className="form-check-input" type="checkbox" checked={form.enabled}
+          onChange={(e) => setForm({ ...form, enabled: e.target.checked })} />
+        <label htmlFor="ip-active" className="form-check-label">IP erişim denetimini etkinleştir</label>
+      </div>
+      {data?.clientIp && <p className="small">Mevcut IP adresiniz <span className="font-monospace user-select-all">{data.clientIp}</span></p>}
+      <form className="row g-2 align-items-end mb-3" onSubmit={add}>
+        <div className="col-sm-6">
+          <label htmlFor="ip-rule" className="form-label">IP adresi veya CIDR</label>
+          <input id="ip-rule" className="form-control font-monospace" value={entry} maxLength={64} required
+            placeholder="192.0.2.10 veya 192.0.2.0/24" onChange={(event) => { setEntry(event.target.value); setEntryError(''); }} />
+        </div>
+        <div className="col-sm-3">
+          <label htmlFor="ip-kind" className="form-label">Kural</label>
+          <select className="form-select" id="ip-kind" value={kind} onChange={(event) => setKind(event.target.value)}>
+            <option value="allow">İzin ver</option><option value="deny">Engelle</option>
+          </select>
+        </div>
+        <div className="col-auto"><button type="submit" className="btn btn-outline-primary">Kural ekle</button></div>
+      </form>
+      {entryError && <p role="alert" className="text-danger small">{entryError}</p>}
+      <div className="table-responsive">
+        <table className="table align-middle">
+          <thead><tr><th>IP adresi veya ağ</th><th>Kural</th><th className="text-end">İşlem</th></tr></thead>
+          <tbody>{rules.length ? rules.map((rule, index) => <tr key={`${rule.kind}-${rule.value}-${index}`}>
+            <td className="font-monospace">{rule.value}</td>
+            <td>{rule.kind === 'allow' ? 'İzin ver' : 'Engelle'}</td>
+            <td className="text-end">
+              <button type="button" className="btn btn-sm btn-outline-danger" aria-label={`${rule.value} kuralını kaldır`}
+                onClick={() => setForm({ ...form, [rule.kind]: form[rule.kind].filter((value) => value !== rule.value) })}>Kaldır</button>
+            </td>
+          </tr>) : <tr><td colSpan={3} className="text-body-secondary">Henüz IP kuralı eklenmedi.</td></tr>}</tbody>
+        </table>
+      </div>
+      <p className="form-text mb-0">Engel listesi önceliklidir. İzin listesine bir adres eklediğinizde yalnızca listedeki adresler erişebilir.</p>
+    </>}
+  </Card>
+  </SettingsLayout>;
+}
+
 export function SecuritySettings() {
+  const session = useSession();
   return (
-    <SettingsLayout icon="shield-lock" title="Güvenlik politikası" subtitle="Firma genelinde oturum, iki adımlı doğrulama ve API anahtarı kuralları">
-      <TenantRequired><SecurityForm /></TenantRequired>
+    <SettingsLayout icon="shield-lock" title="Güvenlik politikası" subtitle="Oturum, iki adımlı doğrulama ve API anahtarı kuralları">
+      {session.tenant ? <SecurityForm /> : <div className="alert alert-info">Firma politikası için üst çubuktan bir firma seçin.</div>}
     </SettingsLayout>
   );
 }

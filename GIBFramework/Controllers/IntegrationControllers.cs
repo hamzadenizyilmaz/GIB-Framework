@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.AspNetCore.RateLimiting;
 using GIBFramework.Models.Integrations;
+using GIBFramework.Models.Audit;
 using GIBFramework.Models.Messaging;
 using GIBFramework.Services.Integrations;
 using GIBFramework.Services.Invoices;
@@ -22,27 +23,44 @@ public sealed class InvoiceDeliveryController(
     InvoiceDocumentService documents,
     NotificationService notifications,
     IAuthorizationService authorization,
-    ITenantContext context) : ControllerBase
+    ITenantContext context,
+    IAuditTrail audit) : ControllerBase
 {
     [HttpGet("{id:guid}/pdf")]
+    [Authorize(Policy = Policies.InvoiceFullDocument)]
     public async Task<IActionResult> Pdf(Guid id, CancellationToken ct)
     {
         var invoice = await documents.LoadAsync(context.RequireTenant(), id, ct) ?? throw new NotFoundException("Fatura bulunamadı.");
-        return File(await documents.RenderPdfAsync(invoice, ct), "application/pdf", InvoiceDocumentService.FileBaseName(invoice) + ".pdf");
+        var pdf = await documents.RenderPdfAsync(invoice, ct);
+        await audit.AppendAsync(new AuditEntry("INVOICE_PDF_DOWNLOADED", "Invoice", id.ToString()), null, ct);
+        return File(pdf, "application/pdf", InvoiceDocumentService.FileBaseName(invoice) + ".pdf");
+    }
+
+    [HttpGet("{id:guid}/preview")]
+    [Authorize(Policy = Policies.InvoiceFullDocument)]
+    public async Task<IActionResult> Preview(Guid id, CancellationToken ct)
+    {
+        Response.OnStarting(() =>
+        {
+            Response.Headers.ContentSecurityPolicy = InvoiceDocumentService.PreviewPolicy + "; sandbox; frame-ancestors 'none'";
+            return Task.CompletedTask;
+        });
+        var invoice = await documents.LoadAsync(context.RequireTenant(), id, ct) ?? throw new NotFoundException("Fatura bulunamadı.");
+        var html = await documents.RenderPreviewAsync(invoice, ct);
+        await audit.AppendAsync(new AuditEntry("INVOICE_PREVIEWED", "Invoice", id.ToString()), null, ct);
+        return Content(html, "text/html; charset=utf-8");
     }
 
     [HttpGet("{id:guid}/share-link")]
+    [Authorize(Policy = Policies.InvoiceFullDocument)]
     public async Task<IActionResult> ShareLink(Guid id, CancellationToken ct)
     {
-        if (!await CanShareAsync())
-        {
-            return Forbid();
-        }
-
         var tenantId = context.RequireTenant();
         var invoice = await documents.LoadAsync(tenantId, id, ct) ?? throw new NotFoundException("Fatura bulunamadı.");
         await RequireShareableAsync(invoice, ct);
-        return Ok(new { url = documents.PublicLink(tenantId, id), expiresInDays = InvoiceDocumentService.LinkLifetime.TotalDays });
+        await audit.AppendAsync(new AuditEntry("INVOICE_LINK_CREATED", "Invoice", id.ToString()), null, ct);
+        var url = documents.PublicLink(tenantId, id);
+        return Ok(new { url, pdfUrl = $"{url}/fatura.pdf", expiresInDays = InvoiceDocumentService.LinkLifetime.TotalDays });
     }
 
     [HttpPost("{id:guid}/send")]
@@ -171,7 +189,7 @@ public sealed class HooksController(IntegrationService integrations) : Controlle
 [Route("f")]
 [AllowAnonymous]
 [ApiExplorerSettings(IgnoreApi = true)]
-public sealed class PublicInvoiceController(InvoiceDocumentService documents) : ControllerBase
+public sealed class PublicInvoiceController(InvoiceDocumentService documents, IAuditTrail audit) : ControllerBase
 {
     public const string RateLimitPolicy = "public";
 
@@ -187,6 +205,7 @@ public sealed class PublicInvoiceController(InvoiceDocumentService documents) : 
 
         Response.Headers.CacheControl = "private, no-store";
         Response.Headers["X-Robots-Tag"] = "noindex, nofollow";
+        await audit.AppendSystemAsync(invoice.TenantId, new AuditEntry("INVOICE_LINK_VIEWED", "Invoice", invoice.Id.ToString()), null, ct);
         return Content(await documents.RenderHtmlAsync(invoice, publicView: true, token, ct), "text/html; charset=utf-8", Encoding.UTF8);
     }
 
@@ -202,6 +221,7 @@ public sealed class PublicInvoiceController(InvoiceDocumentService documents) : 
 
         Response.Headers.CacheControl = "private, no-store";
         Response.Headers.ContentDisposition = $"inline; filename=\"{InvoiceDocumentService.FileBaseName(invoice)}.pdf\"";
+        await audit.AppendSystemAsync(invoice.TenantId, new AuditEntry("INVOICE_LINK_PDF", "Invoice", invoice.Id.ToString()), null, ct);
         return File(await documents.RenderPdfAsync(invoice, ct), "application/pdf");
     }
 
@@ -216,6 +236,7 @@ public sealed class PublicInvoiceController(InvoiceDocumentService documents) : 
         }
 
         Response.Headers.CacheControl = "private, no-store";
+        await audit.AppendSystemAsync(invoice.TenantId, new AuditEntry("INVOICE_LINK_XML", "Invoice", invoice.Id.ToString()), null, ct);
         return File(xml, "application/xml", InvoiceDocumentService.FileBaseName(invoice) + ".xml");
     }
 

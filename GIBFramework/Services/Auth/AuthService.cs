@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.DataProtection;
+using System.Net;
 using Microsoft.AspNetCore.Identity;
 using GIBFramework.DAL.Identity;
 using GIBFramework.DAL.Tenants;
@@ -31,6 +32,8 @@ public sealed class AuthService(
     SecurityPolicyService policies,
     Messaging.UserNotifier notifier,
     ITenantContext context,
+    IHostEnvironment environment,
+    Middleware.IpAccessPolicy ipAccess,
     IClock clock)
 {
     public const int MaxFailedAttempts = 5;
@@ -40,7 +43,7 @@ public sealed class AuthService(
     private static readonly Lazy<string> DummyHash = new(() => new PasswordHasher<UserAccount>().HashPassword(Dummy, Guid.NewGuid().ToString()));
     private readonly IDataProtector _totpProtector = dataProtection.CreateProtector("GIBFramework.Totp.v1");
 
-    public async Task<LoginResult> LoginAsync(string userCode, string password, string? totpCode, CancellationToken ct)
+    public async Task<LoginResult> LoginAsync(string userCode, string password, string? totpCode, IPAddress? address, CancellationToken ct)
     {
         var now = clock.UtcNow;
         var user = await users.FindByCodeAsync(userCode, ct);
@@ -49,6 +52,17 @@ public sealed class AuthService(
             _ = hasher.VerifyHashedPassword(Dummy, DummyHash.Value, password ?? string.Empty);
             await AuditAsync(null, "AUTH_LOGIN_FAILED", userCode, "Failure", "Kullanıcı yok veya pasif", ct);
             return new LoginResult(LoginOutcome.InvalidCredentials, null, null, null);
+        }
+
+        if (user.TenantId is { } tenantId)
+        {
+            var tenant = await tenants.GetAsync(tenantId, ct);
+            if (tenant is not { IsActive: true } || (!DemoDataSeeder.IsDemoHost(environment) && tenant.Profile.TaxId == DemoDataSeeder.TenantTaxId))
+            {
+                _ = hasher.VerifyHashedPassword(Dummy, DummyHash.Value, password ?? string.Empty);
+                await AuditAsync(user, "AUTH_LOGIN_FAILED", user.UserCode, "Failure", "Firma bu ortamda oturum açamaz.", ct);
+                return new LoginResult(LoginOutcome.InvalidCredentials, null, null, null);
+            }
         }
 
         if (user.IsLockedOut(now))
@@ -79,15 +93,15 @@ public sealed class AuthService(
             user.TotpLastStep = step;
         }
 
+        if (user.TenantId is { } scope && !ipAccess.Allows(address, scope))
+        {
+            await AuditAsync(user, "AUTH_LOGIN_IP_DENIED", user.UserCode, "Failure", "Firma IP kuralı erişimi engelledi.", ct);
+            throw new ForbiddenOperationException("TENANT_IP_ACCESS_DENIED", "Bu IP adresinden firmanızın paneline erişilemez.");
+        }
+
         if (verification == PasswordVerificationResult.SuccessRehashNeeded)
         {
             user.PasswordHash = hasher.HashPassword(user, password!);
-        }
-
-        if (user.TenantId is { } tenantId && (await tenants.GetAsync(tenantId, ct))?.IsActive != true)
-        {
-            await AuditAsync(user, "AUTH_LOGIN_FAILED", user.UserCode, "Failure", "Firma pasif", ct);
-            return new LoginResult(LoginOutcome.InvalidCredentials, null, null, null);
         }
 
         user.FailedLoginCount = 0;

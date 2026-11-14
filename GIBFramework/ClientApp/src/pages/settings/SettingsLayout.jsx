@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Link, NavLink } from 'react-router';
+import { Link, NavLink, useLocation, useNavigate } from 'react-router';
 import { api } from '../../api.js';
 import { useSession } from '../../session.jsx';
 import { PageHeader, Spinner } from '../../components/ui.jsx';
@@ -52,8 +52,9 @@ export const SETTINGS = [
     group: 'Güvenlik',
     items: [
       { to: '/settings/account', icon: 'person-lock', label: 'Hesabım ve 2FA', text: 'Şifre, iki adımlı doğrulama, oturumlar' },
-      { to: '/settings/security', icon: 'shield-lock', label: 'Güvenlik politikası', text: '2FA zorunluluğu, oturum süresi, API anahtarı süresi', tenant: true },
-      { to: '/settings/audit', icon: 'shield-check', label: 'Denetim izi', text: 'Hash zincirli işlem kayıtları', policy: 'AuditRead', tenant: true },
+      { to: '/settings/security', icon: 'shield-lock', label: 'Güvenlik politikası', text: '2FA, oturum ve ağ erişimi', policy: 'SecurityManage' },
+      { to: '/settings/security/ip-access', icon: 'shield', label: 'IP Erişimi', text: 'IP adresleri ve ağ erişim kuralları', policy: 'IpAccessManage' },
+      { to: '/settings/audit', icon: 'shield-check', label: 'Denetim izi', text: 'Hash zincirli işlem kayıtları', policy: 'AuditRead' },
     ],
   },
   {
@@ -79,35 +80,30 @@ export function useSettingsMenu() {
     .filter((g) => g.items.length);
 }
 
-export function SettingsShell({ children }) {
+export function SettingsShell({ heading, children }) {
   const menu = useSettingsMenu();
+  const { pathname } = useLocation();
+  const navigate = useNavigate();
+  const active = menu.find(({ items }) => items.some(({ to }) => pathname === to || pathname.startsWith(`${to}/`)));
   return (
-    <div className="row g-4">
-      <div className="col-lg-3 col-xxl-2">
-        <div className="card shadow-sm position-sticky" style={{ top: '5.5rem' }}>
-          <div className="list-group list-group-flush settings-nav p-2">
-            {menu.map((g) => (
-              <div key={g.group}>
-                <div className="settings-group">{g.group}</div>
-                {g.items.map((i) => (
-                  <NavLink key={i.to} to={i.to} end={i.to !== '/settings/integrations'} className="list-group-item list-group-item-action">
-                    <i className={`bi bi-${i.icon} me-2`} />{i.label}
-                  </NavLink>
-                ))}
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-      <div className="col-lg-9 col-xxl-10 min-w-0">{children}</div>
+    <div className="settings-shell min-w-0">
+      {heading}
+      <nav className="settings-navigation" aria-label="Ayarlar kategorileri">
+        <select aria-label="Ayar kategorisi" className="form-select" value={active?.items[0].to || '/settings'}
+          onChange={(event) => navigate(event.target.value)}>
+          <option value="/settings">Genel merkez</option>
+          {menu.map(({ group, items }) => <option key={group} value={items[0].to}>{group}</option>)}
+        </select>
+        {active?.items.map(({ to, label }) => <NavLink key={to} to={to} end={to !== '/settings/integrations'}>{label}</NavLink>)}
+      </nav>
+      {children}
     </div>
   );
 }
 
-export function SettingsLayout({ icon, title, subtitle, actions, children }) {
+export function SettingsLayout({ icon, title, subtitle, actions, parent, children }) {
   return (
-    <SettingsShell>
-      <PageHeader breadcrumb={[['Ayarlar', '/settings'], [title]]} icon={icon} title={title} subtitle={subtitle} actions={actions} />
+    <SettingsShell heading={<PageHeader breadcrumb={[['Ayarlar', '/settings'], ...(parent ? [parent] : []), [title]]} icon={icon} title={title} subtitle={subtitle} actions={actions} />}>
       {children}
     </SettingsShell>
   );
@@ -119,9 +115,13 @@ export function SettingsHub() {
   return (
     <>
       <PageHeader icon="gear" title="Ayarlar" subtitle={session.tenant?.name} />
+      <nav className="settings-navigation" aria-label="Ayarlar kategorileri">
+        <NavLink to="/settings" end>Genel merkez</NavLink>
+        {menu.map(({ group, items }) => <Link key={group} to={items[0].to}>{group}</Link>)}
+      </nav>
       {menu.map((g) => (
-        <div key={g.group} className="mb-4">
-          <h2 className="h6 text-uppercase text-body-secondary fw-semibold mb-3" style={{ letterSpacing: '.06em' }}>{g.group}</h2>
+        <section key={g.group} className="settings-hub-group mb-4">
+          <h2 className="h6 fw-semibold mb-3">{g.group}</h2>
           <div className="row row-cols-1 row-cols-md-2 row-cols-xl-3 row-cols-xxl-4 g-3">
             {g.items.map((i) => (
               <div className="col" key={i.to}>
@@ -137,7 +137,7 @@ export function SettingsHub() {
               </div>
             ))}
           </div>
-        </div>
+        </section>
       ))}
     </>
   );

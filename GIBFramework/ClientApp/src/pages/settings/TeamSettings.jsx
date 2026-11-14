@@ -218,6 +218,12 @@ export function UsersSettings() {
                               toast('Kullanıcı durumu güncellendi.');
                               await reload();
                             }}><i className={`bi bi-${u.isActive ? 'person-dash' : 'person-check'}`} /></BusyButton>
+                            {u.userCode !== session.permissions.userId && <BusyButton className="btn btn-outline-danger" title="Kullanıcıyı sil" onClick={async () => {
+                              if (!await dialogs.confirm('Kullanıcıyı sil', `${u.displayName} hesabının erişimi kapanır. Denetim kayıtları saklanır ve hesap tekrar etkinleştirilebilir.`, 'Kullanıcıyı sil', 'danger')) return;
+                              await api.del(`/api/v1/users/${u.id}`);
+                              toast('Kullanıcı erişimi kaldırıldı.');
+                              await reload();
+                            }}><i className="bi bi-trash" aria-hidden="true" /> Sil</BusyButton>}
                           </div>
                         ) : <i className="bi bi-lock text-body-tertiary" title="Üst yetki seviyesi" />}
                       </td>
@@ -235,16 +241,17 @@ export function UsersSettings() {
 
 export function RolesSettings() {
   const session = useSession();
-  const { data, loading } = useRoles();
+  const { data, loading, error, reload } = useRoles();
   const [open, setOpen] = useState(null);
   if (loading) return <SettingsLayout icon="diagram-3" title="Roller ve yetkiler"><Spinner /></SettingsLayout>;
+  if (error) return <SettingsLayout title="Roller ve yetkiler"><Card><ErrorAlert error={error} /><BusyButton onClick={reload}>Tekrar dene</BusyButton></Card></SettingsLayout>;
   const roles = [...data.roles].sort((a, b) => b.rank - a.rank);
   const labels = Object.fromEntries(data.policies.map((p) => [p.code, p.label]));
   const mine = session.permissions.roles;
 
   return (
-    <SettingsLayout icon="diagram-3" title="Roller ve yetkiler">
-      <div className="card shadow-sm" style={{ maxWidth: '46rem' }}>
+    <SettingsLayout icon="diagram-3" title="Roller ve yetkiler" subtitle="Rol hiyerarşisini ve her role tanımlı işlem izinlerini inceleyin.">
+      <Card title="Rol hiyerarşisi" bodyClass="">
         <div className="list-group list-group-flush">
           {roles.map((r) => (
             <div key={r.code} className="list-group-item px-3 py-2">
@@ -267,7 +274,7 @@ export function RolesSettings() {
             </div>
           ))}
         </div>
-      </div>
+      </Card>
     </SettingsLayout>
   );
 }

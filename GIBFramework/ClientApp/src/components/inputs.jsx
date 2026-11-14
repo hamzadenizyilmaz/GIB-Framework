@@ -1,16 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
-import { digitsOnly, taxIdKind, validateTaxId, ANONYMOUS_TCKN } from '../taxid.js';
+import { digitsOnly, validateTaxId, ANONYMOUS_TCKN } from '../taxid.js';
 
-export function TaxIdInput({ id = 'taxId', value, onChange, required = true, showError = true, className = '', autoFocus, append, anonymous = false }) {
+export function TaxIdInput({ id = 'taxId', value, onChange, onBlur, required = true, showError = true, className = '', autoFocus, append, anonymous = false }) {
   const [touched, setTouched] = useState(false);
   const error = value ? validateTaxId(value) : (required && touched ? 'VKN/TCKN zorunludur.' : null);
   const invalid = showError && touched && !!error;
 
   return (
     <>
-      <div className={`input-group ${invalid ? 'has-validation' : ''}`}>
-        <span className="input-group-text small fw-semibold" style={{ minWidth: '4.2rem' }}>{value ? taxIdKind(value) : 'VKN/TC'}</span>
+      <div className={`input-group tax-id-group ${invalid ? 'has-validation' : ''}`}>
         <input
           id={id}
           className={`form-control font-monospace ${invalid ? 'is-invalid' : value && !error ? 'is-valid' : ''} ${className}`}
@@ -27,7 +26,7 @@ export function TaxIdInput({ id = 'taxId', value, onChange, required = true, sho
             e.preventDefault();
             onChange(digitsOnly(e.clipboardData.getData('text')));
           }}
-          onBlur={() => setTouched(true)}
+          onBlur={() => { setTouched(true); onBlur?.(); }}
         />
         {anonymous && value !== ANONYMOUS_TCKN && (
           <button type="button" className="btn btn-outline-secondary" title="Alıcının TCKN'si yoksa nihai tüketici numarası kullanılır" onClick={() => onChange(ANONYMOUS_TCKN)}>TCKN yok</button>

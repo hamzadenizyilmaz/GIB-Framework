@@ -110,7 +110,8 @@ public sealed class LocationRepository(SqlConnectionFactory connections)
     {
         await using var c = await connections.OpenSystemAsync(ct);
         await using var cmd = c.Command("SELECT Id, Name FROM dbo.Provinces ORDER BY Name COLLATE Turkish_CI_AS");
-        return await ReadAsync(cmd, ct);
+        return (await ReadAsync(cmd, ct))
+            .OrderBy(item => item.Name, StringComparer.Create(CultureInfo.GetCultureInfo("tr-TR"), ignoreCase: true)).ToArray();
     }
 
     public async Task<(IReadOnlyList<LocationItem> Items, bool Loaded)> DistrictsAsync(int provinceId, CancellationToken ct)
@@ -265,7 +266,7 @@ public sealed class LocationRepository(SqlConnectionFactory connections)
         await using var r = await cmd.ExecuteReaderAsync(ct);
         while (await r.ReadAsync(ct))
         {
-            list.Add(new LocationItem(r.GetInt32(0), r.GetString(1)));
+            list.Add(new LocationItem(r.GetInt32(0), TurkishNameFixer.Decode(r.GetString(1))));
         }
 
         return list;
@@ -277,7 +278,7 @@ public sealed class LocationRepository(SqlConnectionFactory connections)
         await using var r = await cmd.ExecuteReaderAsync(ct);
         while (await r.ReadAsync(ct))
         {
-            list.Add(new LocationItem(r.GetInt32(0), r.GetString(1)));
+            list.Add(new LocationItem(r.GetInt32(0), TurkishNameFixer.Decode(r.GetString(1))));
         }
 
         var loaded = false;
@@ -510,6 +511,24 @@ public sealed partial class LocationSyncWorker(IServiceScopeFactory scopes, Loca
 
 public sealed class TurkishNameFixer
 {
+    private static readonly string Letters = "ÇĞİÖŞÜçğıöşü";
+
+    public static string Decode(string name)
+    {
+        foreach (var letter in Letters)
+        {
+            var bytes = System.Text.Encoding.UTF8.GetBytes(letter.ToString());
+            var latin = System.Text.Encoding.Latin1.GetString(bytes);
+            name = name.Replace(latin, letter.ToString(), StringComparison.Ordinal)
+                .Replace(latin.Replace('\u009e', 'ž').Replace('\u009f', 'Ÿ').Replace('\u009c', 'œ')
+                    .Replace('\u0096', '–').Replace('\u0087', '‡')
+                    .Replace('\u0093', '“').Replace('\u0098', '˜').Replace('\u0084', '„')
+                    .Replace('\u0099', '™'),
+                    letter.ToString(), StringComparison.Ordinal);
+        }
+        return name;
+    }
+
     private static readonly CultureInfo Tr = CultureInfo.GetCultureInfo("tr-TR");
     private readonly Dictionary<string, string> _words;
 

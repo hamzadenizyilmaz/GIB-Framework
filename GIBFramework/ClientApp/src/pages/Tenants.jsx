@@ -1,16 +1,14 @@
 import { useNavigate } from 'react-router';
 import { api } from '../api.js';
 import { useSession } from '../session.jsx';
-import { BusyButton, Card, Empty, PageHeader, Spinner, useDialogs, useLoad, useToast } from '../components/ui.jsx';
+import { BusyButton, Card, Empty, ErrorAlert, PageHeader, Spinner, useDialogs, useLoad, useToast } from '../components/ui.jsx';
 
 export function Tenants() {
   const session = useSession();
   const dialogs = useDialogs();
   const toast = useToast();
   const navigate = useNavigate();
-  const { data: rows, loading, reload } = useLoad(() => api.get('/api/v1/tenants'), []);
-
-  if (loading && !rows) return <Spinner />;
+  const { data: rows, loading, error, reload } = useLoad(() => api.get('/api/v1/tenants'), []);
 
   const create = async () => {
     const f = await dialogs.form({
@@ -50,17 +48,22 @@ export function Tenants() {
 
   return (
     <>
-      <PageHeader icon="buildings" title="Firmalar" actions={<BusyButton onClick={create}><i className="bi bi-plus-lg me-1" />Yeni firma</BusyButton>} />
-      <Card bodyClass="">
-        {rows.length ? (
+      <PageHeader breadcrumb={[[ 'Ayarlar', '/settings' ], [ 'Firmalar' ]]} icon="buildings" title="Firmalar"
+        subtitle="Platform firmaları ve çalışma bağlamı"
+        actions={<BusyButton onClick={create}><i className="bi bi-plus-lg" aria-hidden="true" />Yeni firma</BusyButton>} />
+      <Card title="Firma envanteri">
+        <ErrorAlert error={error} />
+        {error && <BusyButton className="btn btn-outline-primary mb-3" onClick={reload}>Yenile</BusyButton>}
+        {loading && !rows ? <Spinner /> : rows?.length ? (
           <div className="table-responsive">
             <table className="table align-middle mb-0">
-              <thead><tr><th>Firma</th><th>VKN/TCKN</th><th>Vergi dairesi</th><th>Seriler</th><th>e-Belge</th><th /></tr></thead>
+              <thead><tr><th>Firma</th><th>VKN/TCKN</th><th>Şehir</th><th>Vergi dairesi</th><th>Seriler</th><th>e-Belge</th><th>İşlem</th></tr></thead>
               <tbody>
                 {rows.map((t) => (
                   <tr key={t.id} className={session.tenantOverride === t.id ? 'table-primary' : ''}>
                     <td className="fw-semibold">{t.name}<div className="small mono text-body-secondary fw-normal user-select-all">{t.id}</div></td>
                     <td className="mono">{t.profile.taxId}</td>
+                    <td>{t.profile.city || '—'}</td>
                     <td>{t.profile.taxOffice || '—'}</td>
                     <td className="mono small">{t.eFaturaPrefix} / {t.eArsivPrefix}</td>
                     <td>
@@ -79,7 +82,7 @@ export function Tenants() {
               </tbody>
             </table>
           </div>
-        ) : <Empty icon="buildings">Firma yok.</Empty>}
+        ) : !error && <Empty icon="buildings">Firma yok.</Empty>}
       </Card>
     </>
   );

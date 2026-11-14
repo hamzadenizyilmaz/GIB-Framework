@@ -99,16 +99,22 @@ public sealed class UblInvoiceWriter
 
     private static XElement Party(InvoiceParty p) =>
         new(UblNs.Cac + "Party",
+            p.Website is null ? null : Cbc("WebsiteURI", p.Website),
             new XElement(UblNs.Cac + "PartyIdentification",
                 new XElement(UblNs.Cbc + "ID", new XAttribute("schemeID", Scheme(p.TaxId)), p.TaxId)),
+            p.TradeRegistryNumber is null ? null : new XElement(UblNs.Cac + "PartyIdentification",
+                new XElement(UblNs.Cbc + "ID", new XAttribute("schemeID", "TICARETSICILNO"), p.TradeRegistryNumber)),
+            p.MersisNumber is null ? null : new XElement(UblNs.Cac + "PartyIdentification",
+                new XElement(UblNs.Cbc + "ID", new XAttribute("schemeID", "MERSISNO"), p.MersisNumber)),
             p.Kind == PartyKind.LegalEntity || Scheme(p.TaxId) == "VKN"
                 ? new XElement(UblNs.Cac + "PartyName", Cbc("Name", p.Title))
                 : null,
             Address(p),
             string.IsNullOrWhiteSpace(p.TaxOffice) ? null : new XElement(UblNs.Cac + "PartyTaxScheme",
                 new XElement(UblNs.Cac + "TaxScheme", Cbc("Name", p.TaxOffice))),
-            p.Email is null && p.Phone is null ? null : new XElement(UblNs.Cac + "Contact",
+            p.Email is null && p.Phone is null && p.Fax is null ? null : new XElement(UblNs.Cac + "Contact",
                 p.Phone is null ? null : Cbc("Telephone", p.Phone),
+                p.Fax is null ? null : Cbc("Telefax", p.Fax),
                 p.Email is null ? null : Cbc("ElectronicMail", p.Email)),
             Scheme(p.TaxId) == "TCKN"
                 ? new XElement(UblNs.Cac + "Person",
@@ -189,7 +195,8 @@ public sealed class UblInvoiceWriter
                             Cbc("TaxTypeCode", l.WithholdingCode))))),
             new XElement(UblNs.Cac + "Item",
                 l.Description is null ? null : Cbc("Description", l.Description),
-                Cbc("Name", l.Name)),
+                Cbc("Name", l.Name),
+                l.ProductCode is null ? null : new XElement(UblNs.Cac + "SellersItemIdentification", Cbc("ID", l.ProductCode))),
             new XElement(UblNs.Cac + "Price", Amount("PriceAmount", l.UnitPrice, cur)));
 
     private static decimal TaxEngineRound(decimal value) => decimal.Round(value, 2, MidpointRounding.AwayFromZero);

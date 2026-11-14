@@ -4,7 +4,7 @@ public sealed class SecurityHeadersMiddleware(RequestDelegate next, IHostEnviron
 {
     private const string AppPolicy =
         "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; "
-        + "connect-src 'self'; frame-src 'self'; worker-src 'self' blob:; manifest-src 'self'; media-src 'self'; object-src 'none'; "
+        + "connect-src 'self'; frame-src 'self' blob:; worker-src 'self' blob:; manifest-src 'self'; media-src 'self'; object-src 'none'; "
         + "base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
 
     private const string DocsPolicy =
@@ -30,7 +30,8 @@ public sealed class SecurityHeadersMiddleware(RequestDelegate next, IHostEnviron
             var headers = context.Response.Headers;
             headers.Remove("Server");
             headers.Remove("X-Powered-By");
-            headers.ContentSecurityPolicy = (isDocs ? DocsPolicy : AppPolicy) + (request.IsHttps ? "; upgrade-insecure-requests" : string.Empty);
+            if (!headers.ContainsKey("Content-Security-Policy"))
+                headers.ContentSecurityPolicy = (isDocs ? DocsPolicy : AppPolicy) + (request.IsHttps ? "; upgrade-insecure-requests" : string.Empty);
             headers.XContentTypeOptions = "nosniff";
             headers.XFrameOptions = "DENY";
             headers.XXSSProtection = "0";

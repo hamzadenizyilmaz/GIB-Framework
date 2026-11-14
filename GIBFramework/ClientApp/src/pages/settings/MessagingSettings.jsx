@@ -382,11 +382,12 @@ function Templates() {
     return [...map.values()];
   }, [data]);
   useEffect(() => {
-    if (data && !selected) setSelected({ key: data[0].key, channel: data[0].channel });
+    if (data?.length && !selected) setSelected({ key: data[0].key, channel: data[0].channel });
   }, [data, selected]);
 
   if (loading) return <Spinner />;
   if (error) return <ErrorAlert error={error} />;
+  if (!data?.length) return <Card><Empty icon="file-earmark-text">Bildirim şablonu bulunamadı.</Empty></Card>;
   const current = data.find((t) => t.key === selected?.key && t.channel === selected?.channel);
 
   return (

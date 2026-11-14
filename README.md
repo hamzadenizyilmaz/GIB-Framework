@@ -22,10 +22,11 @@ Gelir İdaresi Başkanlığı e-Fatura ve e-Arşiv süreçleri için çok amaçl
 ![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet&logoColor=white)
 ![React](https://img.shields.io/badge/React-19-149ECA?logo=react&logoColor=white)
 ![SQL Server](https://img.shields.io/badge/SQL%20Server-2019%2B-CC2927?logo=microsoftsqlserver&logoColor=white)
-![Sürüm](https://img.shields.io/badge/s%C3%BCr%C3%BCm-5.5.1-0778E6)
+![Sürüm](https://img.shields.io/badge/s%C3%BCr%C3%BCm-6.0.0-0778E6)
 
 [Proje sitesi](https://framework.hamzadenizyilmaz.com.tr) &nbsp;|&nbsp;
 [API dokümantasyonu](#rest-api) &nbsp;|&nbsp;
+[Kurulum kılavuzu](install.md) &nbsp;|&nbsp;
 [Değişiklik günlüğü](CHANGELOG.md) &nbsp;|&nbsp;
 [Güvenlik](SECURITY.md)
 
@@ -63,18 +64,18 @@ fatura müşteriye e-posta ve SMS ile, kaynak platforma ise PDF bağlantısı ol
 
 | Alan | Kapsam |
 |---|---|
-| e-Fatura ve e-Arşiv | Alıcının e-Fatura mükellefiyetine göre belge türünün otomatik seçimi; taslak, doğrulama, onay, imza ve gönderim aşamaları |
+| e-Fatura ve e-Arşiv | Cari karttaki e-Fatura durumuna göre belge seçimi, taslak, doğrulama, onay, imza ve gönderim |
 | UBL-TR | UBL-TR 1.2 belge üretimi, XAdES-BES imza, GİB karekodu |
-| Kanıt kasası | İmzalı belgelerin hash zinciriyle bağlanmış, değiştirilemez arşivi ve bütünlük doğrulaması |
-| PDF fatura | Firma logosu ve karekod içeren A4 çıktı; çok sayfalı kalem listesi, Türkçe karakter desteği |
-| Paylaşım bağlantısı | Müşterinin oturum açmadan faturayı görüntüleyip PDF ve XML indirebildiği, süre sınırlı ve imzalı bağlantı |
+| Kanıt kasası | Hash zincirli belge arşivi ve okuma sırasında boyut ve SHA-256 doğrulaması |
+| PDF fatura | A4 görünüm, firma logosu, karekod, ürün kodu, KDV, banka ve iade alanı |
+| Paylaşım bağlantısı | Dış paylaşıma uygun faturalar için süreli müşteri PDF adresi. Diğer faturalar için yetki gerektiren panel adresi. |
 | Nihai tüketici | Kimlik numarası bulunmayan alıcılar için `11111111111` ile düzenleme |
 
 ### GİB ve mevzuat
 
 | Alan | Kapsam |
 |---|---|
-| GİB e-Arşiv Portal | Test kullanıcısı, portal taslağı, SMS doğrulaması ile imzalama, portal belgelerinin listelenmesi |
+| GİB e-Arşiv Portal | Test kullanıcısı, ETTN ile taslak mutabakatı, SMS imzası, imzalı belge arşivi ve belge listesi |
 | Kural motoru | Sürümlenen ve yürürlük tarihli KDV, tevkifat ve istisna kuralları; mevzuat kaynağı değişiklik takibi |
 | Referans veriler | 81 il, TKGM ilçe ve mahalle verisi, 860 birimlik GİB vergi dairesi listesi |
 
@@ -84,7 +85,7 @@ fatura müşteriye e-posta ve SMS ile, kaynak platforma ise PDF bağlantısı ol
 |---|---|
 | E-posta | STARTTLS, SSL ve SMTP AUTH destekli yerleşik istemci; firma markalı HTML şablonlar; PDF ve UBL-TR XML ekleri |
 | SMS | Netgsm REST v2 ile gönderim, gönderici başlığı listesi ve bakiye sorgusu |
-| Pazaryerleri | Trendyol, Hepsiburada ve n11 siparişlerinin periyodik olarak alınması ve fatura bağlantısının iletilmesi |
+| Pazaryerleri | Trendyol, Hepsiburada ve n11 sipariş aktarımı, başarısız kayıtları yeniden işleme ve fatura bağlantısı iletme |
 | E-ticaret ve hosting | WooCommerce, Shopify, WHMCS ve WISECP için HMAC imzalı webhook kabulü |
 | Özel uygulamalar | Genel sipariş şeması ile gelen istekler ve imzalı giden webhook bildirimleri |
 
@@ -94,8 +95,9 @@ fatura müşteriye e-posta ve SMS ile, kaynak platforma ise PDF bağlantısı ol
 |---|---|
 | Yetkilendirme | 14 rollü seviye hiyerarşisi ve politika tabanlı yetki modeli |
 | Kimlik doğrulama | JWT, TOTP iki adımlı doğrulama, hesap kilitleme, firma bazlı oturum ve hareketsizlik politikası |
+| IP Erişimi | Firma ve platform kapsamlarında IP veya CIDR izin ve engel listeleri |
 | Panel | React 19 ve Bootstrap 5; açık ve koyu tema, vurgu rengi ve yoğunluk seçenekleri, mobil uyumlu arayüz |
-| Gözlemlenebilirlik | Sistem durumu sayfası, gönderim kayıtları, hash zincirli denetim izi, korelasyon kimliği |
+| Denetim | Kullanıcı, rol, işlem, tarih ve sonuç filtreli hash zincirli kayıtlar ve belge bütünlük denetimi |
 
 ## Mimari
 
@@ -143,42 +145,26 @@ sistemlerdeki kesintiler fatura işlemini etkilemez.
 
 ## Kurulum
 
-### Gereksinimler
-
-- .NET 10 SDK 10.0.404 ve Node.js 24
-- SQL Server 2019 veya üzeri (geliştirme için SQL Server Express, `.\SQLEXPRESS`)
-
-### Adımlar
-
-1. Yerel temiz kurulum için SQL Server Management Studio ile `database/GIBFramework_TamKurulum.sql` dosyasını çalıştırın. Mevcut şema 4 kurulumunda `database/06_Sema5.sql` dosyasını uygulayın.
-2. `GIBFramework.sln` çözümünü açıp uygulamayı başlatın. Panel, derleme sırasında otomatik olarak derlenir ve uygulama
-   `http://localhost:5097` adresinde açılır.
-
-Komut satırından:
+Kurulum için .NET 10 SDK 10.0.404, Node.js 24 ve SQL Server 2019 veya üzeri kullanın. [Kurulum kılavuzundaki](install.md) SQL kurulumunu ve yerel gizli ayarları tamamladıktan sonra uygulamayı başlatın.
 
 ```bash
 dotnet run --project GIBFramework/GIBFramework.csproj --launch-profile http
 ```
 
-Panel üzerinde anlık geliştirme için uygulama çalışırken:
-
-```bash
-cd GIBFramework/ClientApp
-npm run dev
-```
+[Panel](http://localhost:5097/app/#/login) ve [hazırlık denetimi](http://localhost:5097/health/ready) aynı sunucudadır. Panel derlemesi otomatik çalışır. Sunucu genelindeki ve firma bazındaki kurallar **Ayarlar → Güvenlik → IP Erişimi** sayfasından yönetilir. Başlangıçtaki platform kuralları sunucuda `IpAccess:Allow` ve `IpAccess:Deny` ile verilebilir.
 
 ## Demo hesapları
 
-Aşağıdaki hesaplar yerel geliştirme ayarlarıyla oluşturulur. Ayrı `Demo` dağıtımında `Demo:Enabled` ve `Demo:Password` ortamdan verilir. Üretimde demo verisi devre dışıdır.
+Geliştirme veya demo ortamında `Demo:Enabled` etkinleştirildiğinde aşağıdaki hesaplar, operatörün belirlediği `Demo:Password` ile oluşturulur.
 
-| Kullanıcı kodu | Şifre | Rol |
-|---|---|---|
-| `yonetici` | `GibDemo2026` | Genel Müdür / CEO |
-| `firmaadmin` | `GibDemo2026` | Firma yöneticisi |
-| `onay` | `GibDemo2026` | Muhasebe müdürü |
-| `muhasebe` | `GibDemo2026` | Muhasebeci, fatura hazırlayan |
-| `imza` | `GibDemo2026` | İmza yetkilisi, entegrasyon yöneticisi |
-| `denetci` | `GibDemo2026` | Arşiv denetçisi |
+| Kullanıcı kodu | Rol |
+|---|---|
+| `yonetici` | Genel Müdür / CEO |
+| `firmaadmin` | Firma yöneticisi |
+| `onay` | Muhasebe müdürü |
+| `muhasebe` | Muhasebeci, fatura hazırlayan |
+| `imza` | İmza yetkilisi, entegrasyon yöneticisi |
+| `denetci` | Arşiv denetçisi |
 
 Boş veritabanında ilk platform yöneticisi `Bootstrap:AdminUserCode` ve `Bootstrap:AdminPassword` ayarlarıyla oluşturulur. Yerel yapılandırmada kullanıcı kodu `admin` ve ilk girişte şifre değişikliği etkindir.
 
@@ -212,6 +198,8 @@ Seçili yetki politikaları:
 | E-posta, SMS ve şablonlar | CEO, firma yöneticisi |
 | Entegrasyonlar | CEO, firma yöneticisi, entegrasyon yöneticisi |
 | Güvenlik politikası | Platform yöneticisi, CEO, firma yöneticisi, güvenlik sorumlusu |
+| IP erişim kuralları | Platform yöneticisi site genelinde, CEO kendi firmasında |
+| Fatura onayı | Platform yöneticisi seçili firmada, CEO, muhasebe müdürü ve onay yetkilisi |
 | Kullanıcı ve rol yönetimi | Platform yöneticisi, CEO, firma yöneticisi |
 | Fatura imzalama | CEO, imza yetkilisi |
 
@@ -346,7 +334,7 @@ Yayın bağımsız `win-x64` olarak derlenir. IIS için .NET 10 Hosting Bundle i
 dotnet publish GIBFramework/GIBFramework.csproj -c Release -r win-x64 --self-contained true -o publish/httpdocs
 ```
 
-Paylaşım arşivindeki `httpdocs/` uygulama dosyalarını, `database/` SQL betiklerini içerir. Plesk site köküne `httpdocs/` içeriğini kopyalayın. Üretim bağlantı dizesini ve JWT anahtarını sunucunun dağıtım ayarlarından verin.
+`publish/httpdocs/` uygulama dosyalarını içerir. Plesk site köküne bu dizinin içeriğini kopyalayın. SQL betiklerini [database](database/) dizininden hedef veritabanına uygulayın. Üretim bağlantı dizesini ve JWT anahtarını dağıtım ortamından verin. Adımlar [install.md](install.md) dosyasındadır.
 
 ### Ortamlar
 
@@ -358,7 +346,7 @@ Paylaşım arşivindeki `httpdocs/` uygulama dosyalarını, `database/` SQL beti
 
 IIS/Plesk uygulama havuzuna .NET 10 Hosting Bundle ile gelen ASP.NET Core Module V2 gerekir. Uygulama havuzunda `ASPNETCORE_ENVIRONMENT=Production` tanımlayın ve gizli değerleri dağıtım ortamından verin. Üretim ayarlarını tamamladıktan sonra HTTPS üzerinden `/health` ve `/health/ready` uçlarını doğrulayın. Sistem ekranı hazırlık nedenini ve denetim süresini gösterir.
 
-v5.2.1 yükseltmesinde uygulamayı durdurup şema 5'i uygulayın. API anahtarıyla çalışan istemciler `/api/v1/auth/permissions` ve atanmış makine işlemlerini kullanabilir. Hesap, fatura onayı, imza ve portal işlemleri için kullanıcı oturumu gerekir. Önceki portal kayıtlarının dış bağlantıları, yeni sürümde doğrulanmış düzenleme kanıtı gerektirir. IIS ve ters proxy erişim günlüklerinde `/f/` yollarındaki bağlantı belirteçlerini ve hassas sorgu dizelerini kaydetmeyin.
+v6.0.0 SQL şema 5 ile çalışır. API anahtarıyla çalışan istemciler `/api/v1/auth/permissions` ve atanmış makine işlemlerini kullanabilir. Hesap, fatura onayı, imza ve portal işlemleri için kullanıcı oturumu gerekir. Portal kayıtlarının dış bağlantıları doğrulanmış düzenleme kanıtı gerektirir. IIS ve ters proxy erişim günlüklerinde `/f/` yollarındaki bağlantı belirteçlerini ve hassas sorgu dizelerini kaydetmeyin.
 
 Mevcut şema 4 veritabanında `database/06_Sema5.sql` dosyasını `ALTER ANY SECURITY POLICY` yetkisi olan veritabanı yöneticisi çalıştırır. Betik eksik firma satır güvenliği politikasını aynı işlemde kurar. Kurulumdan sonra `dbo.SchemaInfo` tablosundaki son sürüm 5 ve `dbo.TenantIsolation` politikası etkin olmalıdır.
 
@@ -371,6 +359,7 @@ Varsayılanlar `appsettings.json` dosyasındadır. Ortama özel değişkenlerde 
 | `ConnectionStrings:GibFramework` | SQL Server bağlantı dizesi |
 | `Jwt:Issuer`, `Jwt:SigningKey` | Yerel JWT issuer ve en az 32 baytlık gizli anahtar |
 | `Bootstrap:AdminPassword` | İlk platform yöneticisi şifresi |
+| `Compliance:SeedPath` | Mevzuat kaynağı, yürürlükteki onaylı belge yönlendirme kuralları ve vergi kataloğu dizini |
 | `App:PublicUrl` | E-posta, paylaşım ve pazaryeri bağlantılarında kullanılan genel adres |
 | `Signing:Mode`, `Signing:TrustedRootSha256` | `WindowsStore` ve Windows güven deposundaki GİB zinciri köklerinin SHA-256 parmak izleri. İptal doğrulaması için güncel CRL/OCSP verisi gerekir. |
 | `Providers:PortalOnly`, `GibPortal:AllowProduction` | Canlı portal yayını için ikisini de `true` yapın. Portal oturumu ve SMS isteği için tek IIS işçi süreci kullanın. |

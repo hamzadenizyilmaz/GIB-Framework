@@ -14,13 +14,14 @@ const pick = (row, ...keys) => keys.map((k) => row?.[k]).find((v) => v !== undef
 
 export function GibDocuments() {
   const dialogs = useDialogs();
-  const { data: status, loading } = useLoad(() => api.get('/api/v1/gib-portal/status'), []);
+  const { data: status, loading, error: statusError, reload } = useLoad(() => api.get('/api/v1/gib-portal/status'), []);
   const [tab, setTab] = useState('issued');
   const [range, setRange] = useState({ from: daysAgo(30), to: todayIso() });
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
 
   if (loading) return <Spinner />;
+  if (statusError) return <Card title="Portal durumu alınamadı"><ErrorAlert error={statusError} /><BusyButton onClick={reload}>Tekrar dene</BusyButton></Card>;
 
   const load = async (which = tab) => {
     setError(null);
@@ -43,7 +44,7 @@ export function GibDocuments() {
     return (
       <>
         <PageHeader icon="files" title="GİB portal belgeleri" />
-        <div className="alert alert-info d-flex justify-content-between align-items-center">
+        <div className="alert alert-info d-flex flex-wrap gap-2 justify-content-between align-items-center">
           <span><i className="bi bi-plug me-1" />Belgeleri görmek için GİB e-Arşiv Portal'a bağlanın.</span>
           <Link className="btn btn-sm btn-primary" to="/gib-portal">Bağlan</Link>
         </div>

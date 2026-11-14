@@ -135,10 +135,12 @@ public sealed class PdfBuilder
         var encoding = Reserve();
         var font1 = Reserve();
         var font2 = Reserve();
+        var unicodeMap = Reserve();
         var info = Reserve();
         Set(encoding, "<< /Type /Encoding /BaseEncoding /WinAnsiEncoding /Differences [208 /Gbreve 221 /Idotaccent /Scedilla 240 /gbreve 253 /dotlessi /scedilla] >>");
-        Set(font1, $"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding {encoding} 0 R >>");
-        Set(font2, $"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding {encoding} 0 R >>");
+        SetStream(unicodeMap, string.Empty, Encoding.ASCII.GetBytes(PdfText.UnicodeMap()));
+        Set(font1, $"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding {encoding} 0 R /ToUnicode {unicodeMap} 0 R >>");
+        Set(font2, $"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding {encoding} 0 R /ToUnicode {unicodeMap} 0 R >>");
         Set(info, $"<< /Title {PdfText.Utf16(Title)} /Author {PdfText.Utf16(Author)} /Producer {PdfText.Utf16("GIB Framework")} /CreationDate (D:{DateTime.UtcNow.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture)}Z) >>");
 
         var imageIds = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -239,8 +241,32 @@ public static class PdfText
 
     private static readonly HashSet<byte> Replaced = [0xD0, 0xF0, 0xDD, 0xDE, 0xFD, 0xFE];
 
+    internal static string UnicodeMap()
+    {
+        var map = new StringBuilder("""
+            /CIDInit /ProcSet findresource begin
+            12 dict begin begincmap
+            /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
+            /CMapName /InvoiceUnicode def /CMapType 2 def
+            1 begincodespacerange <00> <FF> endcodespacerange
+            3 beginbfrange
+            <20> <7E> <0020>
+            <A0> <CF> <00A0>
+            <DF> <EF> <00DF>
+            endbfrange
+            """).AppendLine();
+        var scalars = Enumerable.Range(0xD1, 0xFF - 0xD1 + 1)
+            .Where(code => (code < 0xDF || code >= 0xF0) && !Replaced.Contains((byte)code))
+            .Select(code => ((byte)code, (char)code))
+            .Concat(Special.Select(pair => (pair.Value, pair.Key))).ToArray();
+        map.Append(scalars.Length).AppendLine(" beginbfchar");
+        foreach (var (code, character) in scalars)
+            map.AppendLine(FormattableString.Invariant($"<{code:X2}> <{(int)character:X4}>"));
+        return map.AppendLine("endbfchar").AppendLine("endcmap CMapName currentdict /CMap defineresource pop").AppendLine("end end").ToString();
+    }
+
     public static string Prepare(string text) =>
-        (text ?? string.Empty).Replace("\u20BA", "TL", StringComparison.Ordinal).Replace('\u2212', '-').Replace('\u00A0', ' ')
+        (text ?? string.Empty).Normalize(NormalizationForm.FormC).Replace("\u20BA", "TL", StringComparison.Ordinal).Replace('\u2212', '-').Replace('\u00A0', ' ')
             .Replace('\t', ' ').Replace("\r", string.Empty, StringComparison.Ordinal).Replace('\n', ' ');
 
     public static byte[] Encode(string text)

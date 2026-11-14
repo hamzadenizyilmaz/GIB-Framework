@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router';
+import { useLocation, useNavigate } from 'react-router';
 import { api, ApiError, storage } from '../api.js';
 import { fmtDate, ROLE_LABELS } from '../format.js';
 import { useSession } from '../session.jsx';
 import { BusyButton, Card, ErrorAlert, Modal, PageHeader, useToast } from '../components/ui.jsx';
-import { LegalStrip, LoginArcs, LoginIllustration } from '../components/Brand.jsx';
+import { Brand, LegalStrip } from '../components/Brand.jsx';
+import { Icon } from '../components/Icon.jsx';
 
 function ForgotPassword({ onClose }) {
   const [userCode, setUserCode] = useState('');
@@ -47,6 +48,7 @@ function ForgotPassword({ onClose }) {
 export function Login() {
   const session = useSession();
   const navigate = useNavigate();
+  const location = useLocation();
   const toast = useToast();
   const [form, setForm] = useState({ userCode: '', password: '', totpCode: '' });
   const [needTotp, setNeedTotp] = useState(false);
@@ -69,7 +71,8 @@ export function Login() {
     try {
       const result = await session.login(form.userCode.trim(), form.password, form.totpCode);
       toast(`Hoş geldiniz, ${result.user.displayName}.`);
-      navigate(result.user.mustChangePassword ? '/change-password' : '/');
+      const destination = location.state?.from;
+      navigate(result.user.mustChangePassword ? '/change-password' : /^\/(?!\/)/.test(destination || '') ? destination : '/', { replace: true });
     } catch (err) {
       if (err instanceof ApiError && err.code === 'TOTP_REQUIRED') {
         setNeedTotp(true);
@@ -88,37 +91,40 @@ export function Login() {
   return (
     <div className="login-page" data-bs-theme="light">
       <div className="login-main">
-        <section className="login-art" aria-hidden="true">
-          <div className="login-brand"><span className="app-brand-icon"><i className="bi bi-receipt-cutoff" /></span>GIB Framework</div>
-          <LoginIllustration />
-        </section>
         <section className="login-panel">
-          <LoginArcs />
           <form className="login-card" noValidate onSubmit={submit}>
-            <h1 className="login-title">Merhaba!</h1>
-            <p className="login-subtitle">Başlamak için giriş yapın</p>
+            <div className="login-brand"><Brand variant="full" /></div>
+            <h1 className="login-title">Hesabınıza giriş yapın</h1>
+            <p className="login-subtitle">e-Belge işlemlerinize güvenle devam edin.</p>
             <ErrorAlert error={error} />
+            <label className="form-label" htmlFor="userCode">Kullanıcı kodu</label>
             <div className="login-field">
-              <i className="bi bi-person" />
-              <input className="form-control" id="userCode" placeholder="Kullanıcı kodu" autoComplete="username" autoFocus value={form.userCode} onChange={set('userCode')} aria-label="Kullanıcı kodu" />
+              <Icon name="person" />
+              <input className="form-control" id="userCode" placeholder="Kullanıcı kodunuzu girin" autoComplete="username" autoFocus value={form.userCode} onChange={set('userCode')} />
             </div>
+            <label className="form-label" htmlFor="password">Şifre</label>
             <div className="login-field">
-              <i className="bi bi-lock-fill" />
-              <input className="form-control" id="password" type={showPassword ? 'text' : 'password'} placeholder="Şifre" autoComplete="current-password" value={form.password} onChange={set('password')} aria-label="Şifre" />
+              <Icon name="shield" />
+              <input className="form-control" id="password" type={showPassword ? 'text' : 'password'} autoComplete="current-password" value={form.password} onChange={set('password')} />
               <button type="button" className="login-eye" onClick={() => setShowPassword((v) => !v)} aria-label={showPassword ? 'Şifreyi gizle' : 'Şifreyi göster'}>
                 <i className={`bi bi-${showPassword ? 'eye-slash' : 'eye'}`} />
               </button>
             </div>
             {needTotp && (
+              <>
+              <label className="form-label" htmlFor="totpCode">Doğrulama kodu</label>
               <div className="login-field">
-                <i className="bi bi-shield-lock" />
-                <input ref={totpRef} className="form-control" id="totpCode" inputMode="numeric" placeholder="Doğrulama kodu" autoComplete="one-time-code" value={form.totpCode} onChange={set('totpCode')} aria-label="Doğrulama kodu" />
+                <i className="bi bi-shield-lock" aria-hidden="true" />
+                <input ref={totpRef} className="form-control" id="totpCode" inputMode="numeric" autoComplete="one-time-code" value={form.totpCode} onChange={set('totpCode')} />
               </div>
+              </>
             )}
             <button className="btn login-submit" type="submit" disabled={busy}>
-              {busy && <span className="spinner-border spinner-border-sm me-2" />}Giriş
+              {busy ? <span className="spinner-border spinner-border-sm" aria-hidden="true" /> : <Icon name="shield" />}
+              {busy ? 'Giriş yapılıyor…' : 'Güvenli giriş yap'}
             </button>
             <button type="button" className="login-forgot" onClick={() => setForgot(true)}>Şifremi unuttum</button>
+            <span className="login-copyright">© 2026 GIB Framework</span>
           </form>
         </section>
       </div>
@@ -128,7 +134,7 @@ export function Login() {
   );
 }
 
-function PasswordForm({ onDone }) {
+function PasswordForm({ onDone, fullWidth = false }) {
   const [values, setValues] = useState({ currentPassword: '', newPassword: '', newPassword2: '' });
   const [validated, setValidated] = useState(false);
   const [error, setError] = useState(null);
@@ -170,7 +176,7 @@ function PasswordForm({ onDone }) {
         <input className={`form-control ${mismatch ? 'is-invalid' : ''}`} id="newPassword2" type="password" autoComplete="new-password" required minLength={10} value={values.newPassword2} onChange={set('newPassword2')} />
         <div className="invalid-feedback">Şifreler aynı olmalıdır.</div>
       </div>
-      <button className="btn btn-primary" type="submit"><i className="bi bi-check2 me-1" />Şifreyi değiştir</button>
+      <button className={`btn btn-primary ${fullWidth ? 'w-100' : ''}`} type="submit"><i className="bi bi-check2" aria-hidden="true" />Şifreyi değiştir</button>
     </form>
   );
 }
@@ -190,14 +196,21 @@ function useRelogin() {
 export function ChangePassword() {
   const relogin = useRelogin();
   return (
-    <div className="row justify-content-center">
-      <div className="col-md-8 col-lg-5">
-        <PageHeader icon="key" title="Şifre değiştir" />
-        <Card>
-          <PasswordForm onDone={() => relogin('Şifreniz değiştirildi. Yeni şifrenizle giriş yapın.')} />
-        </Card>
-      </div>
-    </div>
+    <>
+      <PageHeader title="Şifre değiştir" subtitle="İlk giriş veya güvenlik politikası nedeniyle parola yenileme" />
+      <section className="card password-layout" aria-labelledby="password-heading">
+        <aside className="password-guidance">
+          <i className="bi bi-lock" aria-hidden="true" />
+          <h2>Hesabınızın kontrolü sizde.</h2>
+          <ul><li>En az 10 karakter</li><li>Harf ve rakam kombinasyonu</li><li>Değişiklik sonrası yeniden giriş</li></ul>
+        </aside>
+        <div className="password-content">
+          <h2 id="password-heading">Şifrenizi güncelleyin</h2>
+          <p className="text-body-secondary">Güvenlik politikanız gereği mevcut şifrenizi yenileyin.</p>
+          <PasswordForm fullWidth onDone={() => relogin('Şifreniz değiştirildi. Yeni şifrenizle giriş yapın.')} />
+        </div>
+      </section>
+    </>
   );
 }
 

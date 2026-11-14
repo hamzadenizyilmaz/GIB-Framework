@@ -26,6 +26,9 @@ public sealed partial class DemoDataSeeder(
 {
     public const string TenantTaxId = "1234567890";
 
+    internal static bool IsDemoHost(IHostEnvironment host) =>
+        host.IsDevelopment() || host.IsEnvironment(Base.Extensions.ServiceCollectionExtensions.DemoEnvironment);
+
     private static readonly (string UserCode, string DisplayName, string[] Roles)[] DemoUsers =
     [
         ("yonetici", "Genel Müdür", [Roles.TenantOwner]),
@@ -38,7 +41,7 @@ public sealed partial class DemoDataSeeder(
 
     public async Task EnsureAsync(CancellationToken ct)
     {
-        if (!options.Enabled || !(environment.IsDevelopment() || environment.IsEnvironment(Base.Extensions.ServiceCollectionExtensions.DemoEnvironment)) || string.IsNullOrWhiteSpace(options.Password))
+        if (!options.Enabled || !IsDemoHost(environment) || string.IsNullOrWhiteSpace(options.Password))
         {
             return;
         }

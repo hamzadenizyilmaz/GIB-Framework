@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { api } from '../api.js';
 import { fmtMoney, UNITS } from '../format.js';
 import { useSession } from '../session.jsx';
-import { BusyButton, Card, Empty, PageHeader, Spinner, useDialogs, useLoad, useToast } from '../components/ui.jsx';
+import { BusyButton, Card, Empty, ErrorAlert, PageHeader, Spinner, useDialogs, useLoad, useToast } from '../components/ui.jsx';
 
 export function Products() {
   const session = useSession();
@@ -10,7 +10,7 @@ export function Products() {
   const toast = useToast();
   const [q, setQ] = useState('');
   const canEdit = session.can('CatalogManage');
-  const { data, loading, reload } = useLoad(async () => {
+  const { data, loading, error, reload } = useLoad(async () => {
     const [rows, defs] = await Promise.all([
       api.get('/api/v1/products'),
       api.get('/api/v1/compliance/tax-definitions').catch(() => ({ vatRates: [20, 10, 1, 0], withholdings: [], exemptions: [] })),
@@ -19,6 +19,7 @@ export function Products() {
   }, []);
 
   if (loading && !data) return <Spinner />;
+  if (error) return <Card title="Ürün kataloğu yüklenemedi"><ErrorAlert error={error} /><BusyButton onClick={reload}>Tekrar dene</BusyButton></Card>;
   const { rows, defs } = data;
   const unitLabel = Object.fromEntries(UNITS);
   const filtered = rows.filter((p) => !q.trim() || `${p.code || ''} ${p.name}`.toLocaleLowerCase('tr-TR').includes(q.toLocaleLowerCase('tr-TR')));
@@ -62,10 +63,10 @@ export function Products() {
     <>
       <PageHeader icon="box-seam" title="Ürün & hizmetler" subtitle={`${rows.length} kayıt`}
         actions={canEdit && <BusyButton onClick={() => edit(null)}><i className="bi bi-plus-lg me-1" />Yeni ürün / hizmet</BusyButton>} />
-      <Card className="mb-4">
+      <Card title="Ürün ve hizmet arama" className="mb-4">
         <input className="form-control" placeholder="Kod veya ad ile ara" aria-label="Ara" value={q} onChange={(e) => setQ(e.target.value)} />
       </Card>
-      <Card bodyClass="">
+      <Card title="Katalog kayıtları" bodyClass="invoice-table-body">
         {filtered.length ? (
           <div className="table-responsive">
             <table className="table table-hover align-middle mb-0">

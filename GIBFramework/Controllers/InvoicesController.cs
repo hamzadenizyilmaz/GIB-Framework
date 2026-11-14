@@ -12,13 +12,14 @@ namespace GIBFramework.Controllers;
 [Authorize(Policy = Policies.InvoiceRead)]
 public sealed class InvoicesController(InvoiceService service, IAuthorizationService authorization, ITenantContext context, WorkflowOptions workflow) : ControllerBase
 {
-    private static readonly string[] FullDataRoles =
-    [
-        Roles.TenantOwner, Roles.CompanyAdmin, Roles.AccountingManager, Roles.Accountant,
-        Roles.InvoiceCreator, Roles.InvoiceApprover, Roles.InvoiceSigner, Roles.ApiClient,
-    ];
+    private bool Mask => !Policies.Map[Policies.InvoiceFullDocument].Any(User.IsInRole);
 
-    private bool Mask => !FullDataRoles.Any(User.IsInRole);
+    private InvoicePage MaskPage(InvoicePage page) => !Mask ? page : page with
+    {
+        Items = page.Items.Select(item => item.CustomerTaxId.Length == 11
+            ? item with { CustomerTaxId = TaxIdentifier.TryParse(item.CustomerTaxId, out var taxId, out _) ? taxId.Masked() : "***" }
+            : item).ToArray(),
+    };
 
     [HttpPost]
     [Authorize(Policy = Policies.InvoiceCreate)]
@@ -43,7 +44,7 @@ public sealed class InvoicesController(InvoiceService service, IAuthorizationSer
         [FromQuery] int take = 50,
         [FromQuery] int skip = 0,
         CancellationToken ct = default) =>
-        (await service.ListAsync(new InvoiceQuery(status, from, to, customerTaxId, take, skip, documentType, q), ct)).Items;
+        MaskPage(await service.ListAsync(new InvoiceQuery(status, from, to, customerTaxId, take, skip, documentType, q), ct)).Items;
 
     [HttpGet("page")]
     public async Task<InvoicePage> Page(
@@ -56,7 +57,7 @@ public sealed class InvoicesController(InvoiceService service, IAuthorizationSer
         [FromQuery] int take = 50,
         [FromQuery] int skip = 0,
         CancellationToken ct = default) =>
-        await service.ListAsync(new InvoiceQuery(status, from, to, customerTaxId, take, skip, documentType, q), ct);
+        MaskPage(await service.ListAsync(new InvoiceQuery(status, from, to, customerTaxId, take, skip, documentType, q), ct));
 
     [HttpGet("{id:guid}")]
     public async Task<InvoiceView> Get(Guid id, CancellationToken ct) => (await service.GetAsync(id, ct)).ToView(Mask);
@@ -79,7 +80,7 @@ public sealed class InvoicesController(InvoiceService service, IAuthorizationSer
         if (!(await authorization.AuthorizeAsync(User, policy)).Succeeded) return Forbid();
         var excludeSelf = task == "approve" && workflow.RequireMakerChecker && !context.Roles.Any(workflow.SelfApprovalRoles.Contains);
         var actor = task == "draft" || excludeSelf ? context.RequireUser() : null;
-        return await service.ListAsync(new InvoiceQuery(null, null, null, null, Math.Clamp(take, 1, 100), skip, Task: task, Actor: actor), ct);
+        return MaskPage(await service.ListAsync(new InvoiceQuery(null, null, null, null, Math.Clamp(take, 1, 100), skip, Task: task, Actor: actor), ct));
     }
 
     [HttpGet("{id:guid}/decision")]
@@ -136,10 +137,12 @@ public sealed class InvoicesController(InvoiceService service, IAuthorizationSer
         (await service.ObjectAsync(id, request.Method, request.ReferenceNumber, request.NotificationDate, request.Reason, ct)).ToView(Mask);
 
     [HttpGet("{id:guid}/ubl")]
+    [Authorize(Policy = Policies.InvoiceFullDocument)]
     public async Task<IActionResult> Ubl(Guid id, CancellationToken ct) =>
         File(await service.GetSignedXmlAsync(id, ct), "application/xml", $"{id}.xml");
 
     [HttpGet("{id:guid}/qr")]
+    [Authorize(Policy = Policies.InvoiceFullDocument)]
     public async Task<IActionResult> Qr(Guid id, CancellationToken ct) => File(await service.GetQrPngAsync(id, ct), "image/png");
 
     [HttpGet("{id:guid}/evidence")]

@@ -1,23 +1,35 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { api, uuid } from '../api.js';
 import { fmtDate, fmtMoney, istanbulNow, round2, todayIso, UNITS } from '../format.js';
 import { validateTaxId, ANONYMOUS_TCKN } from '../taxid.js';
 import { useSession } from '../session.jsx';
 import { LocationPicker, TaxIdInput } from '../components/inputs.jsx';
-import { BusyButton, Card, ErrorAlert, PageHeader, Spinner, useLoad, useToast } from '../components/ui.jsx';
+import { BusyButton, Card, ErrorAlert, PageHeader, Spinner, useDialogs, useLoad, useToast } from '../components/ui.jsx';
 
 const EMPTY_CUSTOMER = {
   taxId: '', title: '', firstName: '', familyName: '', regime: 'NotATaxpayer', taxOffice: '', neighborhood: '', street: '', buildingNumber: '',
   district: '', city: '', postalCode: '', email: '', phone: '',
 };
 
+const SALE_FIELDS = [
+  ['referenceNumber', 'Fatura referans numarası', 'text'],
+  ['storeName', 'Mağaza adı', 'text'],
+  ['website', 'Satış yapılan web adresi', 'url'],
+  ['paymentMethod', 'Ödeme şekli', 'text'],
+  ['paymentIntermediary', 'Ödeme aracısı', 'text'],
+  ['paymentDate', 'Ödeme tarihi', 'date'],
+  ['carrierName', 'Taşıyıcı unvanı', 'text'],
+  ['carrierTaxId', 'Taşıyıcı VKN/TCKN', 'text'],
+  ['shippingDate', 'Gönderim tarihi', 'date'],
+];
+
 const REGIMES = [
   ['NotATaxpayer', 'Nihai tüketici'], ['Bilanco', 'Bilanço esası'], ['IsletmeHesabi', 'İşletme hesabı'], ['BasitUsul', 'Basit usul'], ['SerbestMeslek', 'Serbest meslek'],
 ];
 
 const newLine = (defaults) => ({
-  key: uuid(), productId: '', name: '', description: '', quantity: '1', unitCode: defaults?.unitCode || 'C62', unitPrice: '',
+  key: uuid(), productId: '', productCode: '', name: '', description: '', quantity: '1', unitCode: defaults?.unitCode || 'C62', unitPrice: '',
   discountMode: 'amount', discount: '', vatRate: String(defaults?.vatRate ?? 20), vatExemptionCode: '', withholdingCode: '', advanced: false,
 });
 
@@ -49,10 +61,13 @@ function Clock() {
 }
 
 export function InvoiceForm() {
+  const dialogs = useDialogs();
+  const lookupRequest = useRef(null);
   const session = useSession();
   const navigate = useNavigate();
   const toast = useToast();
   const formRef = useRef(null);
+  const submission = useRef(false);
   const idempotencyKey = useMemo(() => uuid(), []);
 
   const { data: refs, error: referenceError, reload: reloadReferences } = useLoad(async () => {
@@ -70,11 +85,21 @@ export function InvoiceForm() {
   const [doc, setDoc] = useState({ deliveryDate: todayIso(), profile: 'TEMELFATURA', currency: 'TRY', exchangeRate: '', orderNumber: '', despatchNumber: '', despatchRequired: false });
   const [lines, setLines] = useState(null);
   const [notes, setNotes] = useState({ selected: [], banks: [], free: '' });
+  const [sale, setSale] = useState({});
   const [lookupInfo, setLookupInfo] = useState(null);
   const [customerSearch, setCustomerSearch] = useState('');
   const [taxOffices, setTaxOffices] = useState([]);
   const [validated, setValidated] = useState(false);
   const [error, setError] = useState(null);
+  const [checkingTaxId, setCheckingTaxId] = useState(false);
+  const autoLookup = useEffectEvent(() => lookup().catch(toast.error));
+  const ready = Boolean(refs && lines);
+
+  useEffect(() => {
+    if (!ready || lookupInfo || customer.taxId.length !== 10 || validateTaxId(customer.taxId)) return undefined;
+    const timer = setTimeout(() => autoLookup(), 450);
+    return () => clearTimeout(timer);
+  }, [ready, customer.taxId, lookupInfo]);
 
   useEffect(() => {
     if (!refs) return;
@@ -124,14 +149,19 @@ export function InvoiceForm() {
   const cur = doc.currency;
   const dueDays = settings.defaults?.paymentDueDays;
 
-  const applyCustomer = (c) => {
+  const applyCustomer = (c, fromLookup = false) => {
+    if (!fromLookup) {
+      lookupRequest.current = null;
+      setCheckingTaxId(false);
+    }
     setCustomer({
       taxId: c.taxId, title: c.title || '', firstName: c.firstName || '', familyName: c.familyName || '', regime: c.regime || 'NotATaxpayer',
       taxOffice: c.taxOffice || '', neighborhood: c.neighborhoodName || '', street: c.street || '', buildingNumber: c.buildingNumber || '',
       district: c.districtName || '', city: c.provinceName || '', postalCode: c.postalCode || '', email: c.email || '', phone: c.phone || '',
     });
-    setCard((x) => ({ ...x, known: true, isEFatura: !!c.isEFaturaRegistered }));
-    setLookupInfo({ inSystem: true, isEFatura: !!c.isEFaturaRegistered });
+    const registered = c.isActive !== false && !!c.isEFaturaRegistered;
+    setCard((x) => ({ ...x, known: true, isEFatura: registered }));
+    setLookupInfo({ inSystem: true, isEFatura: registered });
   };
 
   const setC = (name) => (e) => setCustomer((c) => ({ ...c, [name]: e.target.value }));
@@ -151,7 +181,7 @@ export function InvoiceForm() {
       return;
     }
     setL(key, {
-      productId, name: p.name, description: p.description || '', unitCode: p.unitCode, unitPrice: String(p.unitPrice), vatRate: String(Number(p.vatRate)),
+      productId, productCode: p.code || '', name: p.name, description: p.description || '', unitCode: p.unitCode, unitPrice: String(p.unitPrice), vatRate: String(Number(p.vatRate)),
       vatExemptionCode: p.vatExemptionCode || '', withholdingCode: p.withholdingCode || '', advanced: !!(p.vatExemptionCode || p.withholdingCode),
     });
   };
@@ -167,38 +197,66 @@ export function InvoiceForm() {
       setLookupInfo({ error: problem });
       return;
     }
-    const info = await api.get(`/api/v1/taxpayers/${taxId}`);
-    if (info.customer) {
-      applyCustomer(info.customer);
-    } else {
-      setCard((x) => ({ ...x, known: false, isEFatura: false }));
-    }
-    const result = { inSystem: info.inSystem, isEFatura: info.isEFaturaRegistered };
-    if (session.can('GibPortal')) {
-      const status = await api.get('/api/v1/gib-portal/status').catch(() => null);
-      if (status?.connected) {
-        const r = await api.get(`/api/v1/gib-portal/recipients/${taxId}`).catch(() => null);
-        if (r?.found) {
-          setCustomer((c) => ({
-            ...c,
-            title: r.title || [r.firstName, r.lastName].filter(Boolean).join(' ') || c.title,
-            firstName: r.firstName || c.firstName,
-            familyName: r.lastName || c.familyName,
-            taxOffice: r.taxOffice || c.taxOffice,
-          }));
-          result.gib = 'found';
-        } else {
-          result.gib = 'notFound';
+    if (lookupRequest.current?.taxId === taxId) return;
+    const request = { taxId };
+    lookupRequest.current = request;
+    setCheckingTaxId(true);
+    try {
+      const info = await api.get(`/api/v1/taxpayers/${taxId}`);
+      if (lookupRequest.current !== request) return;
+      if (info.customer) {
+        applyCustomer(info.customer, true);
+      } else {
+        setCard((x) => ({ ...x, known: false, isEFatura: Boolean(info.isEFaturaRegistered) }));
+      }
+      const result = { inSystem: info.inSystem, isEFatura: info.isEFaturaRegistered };
+      if (session.can('GibPortal')) {
+        const status = await api.get('/api/v1/gib-portal/status').catch(() => null);
+        if (lookupRequest.current !== request) return;
+        if (status?.connected) {
+          const r = await api.get(`/api/v1/gib-portal/recipients/${taxId}`).catch(() => null);
+          if (lookupRequest.current !== request) return;
+          if (r?.found) {
+            setCustomer((c) => ({
+              ...c,
+              title: r.title || [r.firstName, r.lastName].filter(Boolean).join(' ') || c.title,
+              firstName: r.firstName || c.firstName,
+              familyName: r.lastName || c.familyName,
+              taxOffice: r.taxOffice || c.taxOffice,
+            }));
+            result.gib = 'found';
+          } else {
+            result.gib = 'notFound';
+          }
         }
       }
+      setLookupInfo(result);
+      if (taxId.length === 10 && result.isEFatura) {
+        setCheckingTaxId(false);
+        await dialogs.show('e-Fatura seçildi', <p>Alıcı e-Fatura mükellefi olarak kayıtlı. Belge türü e-Fatura olarak seçildi.</p>);
+      }
+    } finally {
+      if (lookupRequest.current === request) {
+        lookupRequest.current = null;
+        setCheckingTaxId(false);
+      }
     }
-    setLookupInfo(result);
   };
 
   const buildNotes = () => {
     const list = [];
+    if (docType === 'EArsiv') {
+      SALE_FIELDS.forEach(([key, label]) => {
+        if (sale[key]?.trim()) list.push(`${label}: ${sale[key].trim()}`);
+      });
+      if (sale.website?.trim()) list.push('Bu satış internet üzerinden yapılmıştır.');
+    }
     settings.noteTemplates.filter((n) => notes.selected.includes(n.id)).forEach((n) => list.push(n.text));
-    settings.bankAccounts.filter((b) => notes.banks.includes(b.id)).forEach((b) => list.push(`${b.bankName}${b.branch ? ` ${b.branch}` : ''} - ${b.accountHolder} - IBAN: ${b.iban} (${b.currency})`));
+    settings.bankAccounts.filter((b) => notes.banks.includes(b.id)).forEach((b) => {
+      const fields = [b.bankName, b.branch || '—', b.iban, b.currency].map((value) => value.replaceAll('|', '/'));
+      list.push(`Banka hesabı: ${fields.join(' | ')}`);
+      if (b.accountHolder) list.push(`Hesap sahibi: ${b.accountHolder}`);
+    });
     if (dueDays) {
       const d = new Date(`${todayIso()}T12:00:00+03:00`);
       d.setDate(d.getDate() + Number(dueDays));
@@ -214,6 +272,9 @@ export function InvoiceForm() {
     const taxIdValue = customer.taxId || ANONYMOUS_TCKN;
     const taxProblem = validateTaxId(taxIdValue);
     if (taxProblem) problems.push(taxProblem);
+    if (checkingTaxId || (customer.taxId.length === 10 && !taxProblem && !lookupInfo)) {
+      problems.push('VKN sorgusunun tamamlanmasını bekleyin. Gerekirse Sorgula düğmesini kullanın.');
+    }
     if (!formRef.current.checkValidity()) problems.push('Zorunlu alanları doldurun.');
     if (lines.some((l) => num(l.quantity) <= 0)) problems.push('Miktar sıfırdan büyük olmalıdır.');
     if (lines.some((l) => totals.perLine[l.key].net < 0)) problems.push('İskonto satır tutarını aşamaz.');
@@ -249,6 +310,7 @@ export function InvoiceForm() {
         phone: trim(customer.phone),
       },
       lines: lines.map((l) => ({
+        productCode: trim(l.productCode),
         name: l.name.trim(),
         description: trim(l.description),
         quantity: num(l.quantity),
@@ -267,6 +329,8 @@ export function InvoiceForm() {
       customerIsEFaturaRegistered: card.save && !anonymousBuyer ? card.isEFatura : null,
     };
 
+    if (submission.current) return;
+    submission.current = true;
     try {
       const created = await api.post('/api/v1/invoices', body, { headers: { 'Idempotency-Key': idempotencyKey } });
       toast(`${created.draftNumber || 'Taslak'} oluşturuldu (${created.documentType === 'EFatura' ? 'e-Fatura' : 'e-Arşiv'}).`);
@@ -274,6 +338,8 @@ export function InvoiceForm() {
     } catch (err) {
       setError(err);
       window.scrollTo({ top: 0, behavior: 'smooth' });
+    } finally {
+      submission.current = false;
     }
   };
 
@@ -283,20 +349,23 @@ export function InvoiceForm() {
 
   return (
     <>
-      <PageHeader breadcrumb={[['Faturalar', '/invoices'], ['Yeni fatura']]} icon="plus-circle" title="Yeni fatura"
+      <PageHeader breadcrumb={[['Faturalar', '/invoices'], ['Yeni fatura']]} icon="plus-circle" title="Yeni fatura" subtitle="Alıcı bilgilerini, belge kalemlerini ve vergileri düzenleyin."
         actions={(
-          <span className={`badge fs-6 px-3 py-2 text-bg-${docType === 'EFatura' ? 'primary' : 'info'}`}>
-            <i className="bi bi-file-earmark-text me-1" />{docType === 'EFatura' ? 'e-Fatura' : 'e-Arşiv Fatura'}
-          </span>
+          <>
+            <span className={`badge align-self-center text-bg-${docType === 'EFatura' ? 'primary' : 'info'}`}>
+              <i className="bi bi-file-earmark-text me-1" aria-hidden="true" />{docType === 'EFatura' ? 'e-Fatura' : 'e-Arşiv Fatura'}
+            </span>
+            <BusyButton className="btn btn-primary" onClick={submit}><i className="bi bi-plus-lg" aria-hidden="true" />Taslak oluştur</BusyButton>
+          </>
         )} />
       <ErrorAlert error={error} />
       <form ref={formRef} noValidate className={validated ? 'was-validated' : ''} onSubmit={(e) => e.preventDefault()}>
         <div className="row g-4">
-          <div className="col-xxl-8 d-flex flex-column gap-4">
+          <div className="col-xl-8 d-flex flex-column gap-4">
             <Card title="Alıcı" icon="person-vcard"
               actions={customers.length > 0 && (
-                <div className="position-relative" style={{ width: '18rem' }}>
-                  <input className="form-control form-control-sm" placeholder="Kayıtlı cari ara…" value={customerSearch} onChange={(e) => setCustomerSearch(e.target.value)} />
+                <div className="invoice-customer-search position-relative">
+                  <input className="form-control form-control-sm" aria-label="Kayıtlı cari ara" placeholder="Kayıtlı cari ara…" value={customerSearch} onChange={(e) => setCustomerSearch(e.target.value)} />
                   {filteredCustomers.length > 0 && (
                     <div className="list-group position-absolute w-100 shadow mt-1" style={{ zIndex: 20 }}>
                       {filteredCustomers.map((c) => (
@@ -312,7 +381,8 @@ export function InvoiceForm() {
               <div className="row g-3">
                 <div className="col-md-5">
                   <label className="form-label" htmlFor="taxId">VKN / TCKN</label>
-                  <TaxIdInput value={customer.taxId} autoFocus anonymous required={false} onChange={(v) => { setCustomer((c) => ({ ...c, taxId: v })); setLookupInfo(null); setCard((x) => ({ ...x, known: null })); }}
+                  <TaxIdInput value={customer.taxId} autoFocus anonymous required={false} onChange={(v) => { lookupRequest.current = null; setCheckingTaxId(false); setCustomer((c) => ({ ...c, taxId: v })); setLookupInfo(null); setCard((x) => ({ ...x, known: null, isEFatura: false })); }}
+                    onBlur={() => { if (customer.taxId.length === 10 && !validateTaxId(customer.taxId) && !lookupInfo) lookup().catch(toast.error); }}
                     append={<BusyButton className="btn btn-outline-primary" onClick={lookup}><i className="bi bi-search me-1" />Sorgula</BusyButton>} />
                   {lookupInfo && (
                     <div className="form-text">
@@ -389,9 +459,13 @@ export function InvoiceForm() {
                           </select>
                         </div>
                       )}
-                      <div className={products.length > 0 ? 'col-md-8' : 'col-12'}>
+                      <div className={products.length > 0 ? 'col-md-5' : 'col-md-9'}>
                         <label className="form-label" htmlFor={`n-${l.key}`}>Mal / hizmet adı</label>
                         <input className="form-control form-control-sm" id={`n-${l.key}`} required maxLength={250} value={l.name} onChange={(e) => setL(l.key, { name: e.target.value })} />
+                      </div>
+                      <div className="col-md-3">
+                        <label className="form-label" htmlFor={`code-${l.key}`}>Ürün kodu</label>
+                        <input className="form-control form-control-sm" id={`code-${l.key}`} maxLength={100} value={l.productCode} onChange={(e) => setL(l.key, { productCode: e.target.value })} />
                       </div>
                       <div className="col-6 col-md-2">
                         <label className="form-label" htmlFor={`q-${l.key}`}>Miktar</label>
@@ -489,6 +563,16 @@ export function InvoiceForm() {
                   ))}
                 </div>
               )}
+              {docType === 'EArsiv' && <fieldset className="row g-3 mb-3">
+                <legend className="h6">İnternet satışı ve gönderim notları</legend>
+                <p className="form-text mb-0">Bu alanlar belge notuna eklenir.</p>
+                {SALE_FIELDS.map(([key, label, type]) => <div key={key} className="col-sm-6">
+                  <label className="form-label" htmlFor={`sale-${key}`}>{label}</label>
+                  <input className="form-control" id={`sale-${key}`} type={type} maxLength={key === 'carrierTaxId' ? 11 : 180}
+                    inputMode={key === 'carrierTaxId' ? 'numeric' : undefined} value={sale[key] || ''}
+                    onChange={(e) => setSale((current) => ({ ...current, [key]: key === 'carrierTaxId' ? e.target.value.replace(/\D/g, '') : e.target.value }))} />
+                </div>)}
+              </fieldset>}
               <textarea className="form-control" rows={3} maxLength={1000} placeholder="Ek not (her satır ayrı not)" aria-label="Ek not" value={notes.free} onChange={(e) => setNotes((x) => ({ ...x, free: e.target.value }))} />
               {buildNotes().length > 0 && (
                 <ul className="small text-body-secondary mt-2 mb-0">{buildNotes().map((n, i) => <li key={`${i}-${n}`}>{n}</li>)}</ul>
@@ -496,7 +580,7 @@ export function InvoiceForm() {
             </Card>
           </div>
 
-          <div className="col-xxl-4 d-flex flex-column gap-4">
+          <div className="col-xl-4 d-flex flex-column gap-4">
             <Card title="Belge" icon="calendar3">
               <dl className="row small mb-3">
                 <dt className="col-5">Düzenleme</dt><dd className="col-7"><Clock /></dd>
@@ -534,7 +618,7 @@ export function InvoiceForm() {
               </div>
             </Card>
 
-            <Card title="Toplamlar" icon="calculator" className="border-primary position-sticky" bodyClass="card-body"
+            <Card title="Toplamlar" icon="calculator" className="invoice-totals" bodyClass="card-body"
               footer={<BusyButton className="btn btn-primary btn-lg w-100" onClick={submit}><i className="bi bi-save me-1" />Taslak oluştur</BusyButton>}>
               <table className="table table-sm mb-0">
                 <tbody>

@@ -106,7 +106,7 @@ export function SystemSettings() {
 
   return (
     <SettingsLayout icon="activity" title="Sistem durumu" subtitle={status ? (status.scope === 'platform' ? 'Platform geneli' : 'Seçili firma') : null}
-      actions={<BusyButton className="btn btn-outline-primary btn-pill" onClick={reload}><i className="bi bi-arrow-clockwise me-1" />Yenile</BusyButton>}>
+      actions={<BusyButton className="btn btn-outline-primary" onClick={reload}><i className="bi bi-arrow-clockwise" aria-hidden="true" />Kontrolleri yenile</BusyButton>}>
       <ErrorAlert error={error} />
       {loading && !status ? <Spinner /> : status && (
         <>
@@ -160,7 +160,7 @@ export function SystemSettings() {
           </div>
 
           <div className="row g-4">
-            <div className="col-xl-4">
+            <div className="col-lg-6">
               <Card title="Uygulama" icon="cpu" className="h-100">
                 <dl className="kv mb-0">
                   <dt>Çalışma ortamı</dt><dd>{app.runtime}</dd>
@@ -171,7 +171,7 @@ export function SystemSettings() {
                 </dl>
               </Card>
             </div>
-            <div className="col-xl-4">
+            <div className="col-lg-6">
               <Card title="Veritabanı" icon="database" className="h-100">
                 <dl className="kv mb-0">
                   <dt>Ad</dt><dd className="font-monospace">{db.name}</dd>
@@ -182,7 +182,7 @@ export function SystemSettings() {
                 </dl>
               </Card>
             </div>
-            <div className="col-xl-4">
+            <div className="col-lg-6">
               <Card title="Güvenlik" icon="shield-check" className="h-100">
                 <ul className="list-unstyled small mb-3">
                   <Check ok={sec.https}>HTTPS bağlantı</Check>
@@ -196,12 +196,12 @@ export function SystemSettings() {
                 </div>
               </Card>
             </div>
-            <div className="col-xl-6">
+            <div className="col-lg-6">
               <Card title="İmza sertifikası" icon="patch-check" className="h-100">
                 {cert ? <CertificateBody cert={cert} /> : <div className="small text-body-secondary">Sertifika bilgisi alınamadı.</div>}
               </Card>
             </div>
-            <div className="col-xl-6">
+            <div className="col-lg-6">
               <Card title="TKGM adres verisi" icon="geo-alt" className="h-100">
                 {tkgm ? (
                   <>

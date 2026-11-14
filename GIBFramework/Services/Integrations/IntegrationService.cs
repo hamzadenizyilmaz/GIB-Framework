@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.DataProtection;
 using GIBFramework.DAL;
+using GIBFramework.DAL.Invoices;
 using GIBFramework.DAL.Messaging;
 using GIBFramework.DAL.Tenants;
 using GIBFramework.Infrastructure.Tenancy;
@@ -45,6 +46,7 @@ public sealed partial class IntegrationService(
     IntegrationRepository repository,
     SqlConnectionFactory connections,
     InvoiceService invoices,
+    IInvoiceRepository legacyInvoices,
     InvoiceDocumentService documents,
     ITenantRepository tenants,
     RequestTenantContext requestContext,
@@ -69,6 +71,7 @@ public sealed partial class IntegrationService(
     ];
 
     private readonly IDataProtector _protector = dataProtection.CreateProtector("GIBFramework.Integrations.v1");
+    private readonly IDataProtector _deliveryProtector = dataProtection.CreateProtector("GIBFramework.IntegrationPayload.v1");
 
     public string InboundUrl(Guid id) => $"{app.BaseUrl}/api/v1/hooks/{id}";
 
@@ -150,13 +153,22 @@ public sealed partial class IntegrationService(
     public async Task<IReadOnlyList<IntegrationDelivery>> DeliveriesAsync(Guid id, CancellationToken ct)
     {
         var integration = await LoadOwnedAsync(id, ct);
-        return await repository.DeliveriesAsync(integration.TenantId, id, 100, ct);
+        return (await repository.DeliveriesAsync(integration.TenantId, id, 100, ct)).Select(SafeDelivery).ToArray();
     }
 
     public async Task<bool> RetryAsync(Guid id, Guid deliveryId, CancellationToken ct)
     {
         var integration = await LoadOwnedAsync(id, ct);
-        return await repository.RetryDeliveryAsync(integration.TenantId, integration.Id, deliveryId, clock.UtcNow, ct);
+        if (await repository.RetryDeliveryAsync(integration.TenantId, integration.Id, deliveryId, clock.UtcNow, ct))
+            return true;
+        if (!integration.IsActive || !IsMarketplace(integration.Kind)) return false;
+        await using var lease = await connections.AcquireTenantLockAsync(integration.TenantId, $"integration-sync:{integration.Id:N}", ct);
+        var current = await repository.GetAsync(integration.Id, integration.TenantId, ct);
+        if (current is not { IsActive: true }) return false;
+        var pending = await repository.PendingImportsAsync(current.TenantId, current.Id, null, deliveryId, ct);
+        if (pending.Count == 0) return false;
+        await RunImportAsync(current, pending[0], ct);
+        return true;
     }
 
     public async Task<IntegrationDelivery> TestAsync(Guid id, CancellationToken ct)
@@ -176,7 +188,7 @@ public sealed partial class IntegrationService(
             Direction = DeliveryDirection.Out,
             EventType = "ping",
             Status = DeliveryStatus.Pending,
-            RequestBody = JsonDefaults.Serialize(new { id = Guid.NewGuid(), @event = "ping", createdAt = now, tenantId = integration.TenantId, data = new { message = "GIB Framework bağlantı denemesi" } }),
+            RequestBody = ProtectPayload(integration, JsonDefaults.Serialize(new { id = Guid.NewGuid(), @event = "ping", createdAt = now, tenantId = integration.TenantId, data = new { message = "GIB Framework bağlantı denemesi" } })),
             CreatedAt = now,
             NextAttemptAt = now.AddMinutes(5),
             LeaseId = Guid.NewGuid(),
@@ -184,7 +196,16 @@ public sealed partial class IntegrationService(
         };
         await repository.InsertDeliveryAsync(delivery, ct);
         await DeliverAsync(delivery, ct);
-        return (await repository.DeliveriesAsync(integration.TenantId, integration.Id, 20, ct)).First(d => d.Id == delivery.Id);
+        return SafeDelivery((await repository.DeliveriesAsync(integration.TenantId, integration.Id, 20, ct)).First(d => d.Id == delivery.Id));
+    }
+
+    private static IntegrationDelivery SafeDelivery(IntegrationDelivery delivery)
+    {
+        delivery.RequestBody = null;
+        delivery.ResponseBody = null;
+        if (delivery.Error is not null && delivery.EventType is not ("marketplace.import" or "marketplace.micro-export"))
+            delivery.Error = delivery.HttpStatus is { } status ? $"HTTP {status}. Teslimat durumunu kontrol edin." : "Teslimat durumunu kontrol edin.";
+        return delivery;
     }
 
     public async Task<InboundResult> ReceiveAsync(Guid id, byte[] body, IHeaderDictionary headers, CancellationToken ct)
@@ -214,8 +235,7 @@ public sealed partial class IntegrationService(
         {
             log.Status = status;
             log.HttpStatus = code;
-            log.Error = error;
-            log.ResponseBody = JsonDefaults.Serialize(response);
+            log.Error = error is null ? null : $"Gelen istek işlenemedi (HTTP {code}).";
             await repository.InsertDeliveryAsync(log, CancellationToken.None);
             if (status == DeliveryStatus.Succeeded)
             {
@@ -256,7 +276,7 @@ public sealed partial class IntegrationService(
             return await Finish(DeliveryStatus.Ignored, 200, new { ok = true, ignored = mapped.IgnoredReason });
         }
 
-        log.ExternalId = Truncate(order.ExternalId, 100);
+        log.ExternalId = ExternalKey(order.ExternalId);
         var import = await ImportAsync(integration, order, ct);
         log.InvoiceId = import.InvoiceId;
         return await Finish(import.Status, import.HttpStatus, import.Response, import.Error);
@@ -274,6 +294,8 @@ public sealed partial class IntegrationService(
         var now = clock.UtcNow;
         foreach (var integration in await repository.ActiveByKindsAsync(MarketplaceKinds, ct))
         {
+            if (await repository.InboundCooldownAsync(integration.TenantId, integration.Id, now, ct) is not null)
+                continue;
             var minutes = int.TryParse(integration.Setting("pollMinutes"), out var m) ? Math.Clamp(m, 5, 1440) : 15;
             if (integration.LastInboundAt is { } last && last.AddMinutes(minutes) > now)
             {
@@ -312,6 +334,8 @@ public sealed partial class IntegrationService(
 
         var client = marketplaces.First(c => c.Kind == integration.Kind);
         var now = clock.UtcNow;
+        foreach (var pending in await repository.PendingImportsAsync(integration.TenantId, integration.Id, now, null, ct))
+            await RunImportAsync(integration, pending, ct);
         var maxDays = integration.Kind == IntegrationKind.Trendyol ? 13 : 14;
         var initialDays = int.TryParse(integration.Setting("initialDays"), out var d) ? Math.Clamp(d, 1, maxDays) : 3;
         var from = integration.SyncCheckpointAt?.AddHours(-3) ?? now.AddDays(-initialDays);
@@ -323,42 +347,41 @@ public sealed partial class IntegrationService(
         var to = now;
         int created = 0, skipped = 0, failed = 0;
         string? error = null;
+        if (await repository.InboundCooldownAsync(integration.TenantId, integration.Id, now, ct) is { } nextAttemptAt)
+            return new { created, skipped, failed, error = "Pazaryeri bekleme süresi devam ediyor.", from, to, nextAttemptAt };
         try
         {
             var orders = await client.FetchAsync(integration, Secrets(integration), from, to, ct);
             foreach (var mo in orders)
             {
-                var externalId = Truncate(mo.Order.ExternalId, 100);
-                if (await repository.OrderExistsAsync(integration.TenantId, integration.Id, externalId, ct))
+                var externalId = ExternalKey(mo.Order.ExternalId);
+                if (await repository.OrderExistsAsync(integration.TenantId, integration.Id, externalId, ct)
+                    || await repository.ImportQueuedAsync(integration.TenantId, integration.Id, externalId, ct))
                 {
                     skipped++;
                     continue;
                 }
 
                 const string microExport = "Mikro ihracat profili incelemesi gerekiyor; otomatik fatura oluşturulmadı.";
-                var result = mo.IsMicroExport
-                    ? new ImportResult(DeliveryStatus.Failed, 422, new { code = "MICRO_EXPORT_REVIEW", error = microExport }, microExport, null)
-                    : await ImportAsync(integration, mo.Order, ct);
                 var at = clock.UtcNow;
-                await repository.InsertDeliveryAsync(new IntegrationDelivery
+                var delivery = new IntegrationDelivery
                 {
                     Id = Guid.CreateVersion7(at),
                     TenantId = integration.TenantId,
                     IntegrationId = integration.Id,
                     Direction = DeliveryDirection.In,
-                    EventType = $"{integration.Kind.ToString().ToLowerInvariant()}.order",
-                    Status = result.Status,
-                    HttpStatus = result.HttpStatus,
-                    Attempts = 1,
-                    RequestBody = mo.Raw,
-                    ResponseBody = JsonDefaults.Serialize(result.Response),
-                    Error = result.Error,
-                    InvoiceId = result.InvoiceId,
+                    EventType = mo.IsMicroExport ? "marketplace.micro-export" : "marketplace.import",
+                    Status = mo.IsMicroExport ? DeliveryStatus.Failed : DeliveryStatus.Pending,
+                    HttpStatus = mo.IsMicroExport ? 422 : null,
+                    NextAttemptAt = mo.IsMicroExport ? null : at,
+                    RequestBody = mo.IsMicroExport ? null : ProtectPayload(integration, JsonDefaults.Serialize(mo.Order)),
+                    Error = mo.IsMicroExport ? microExport : null,
                     ExternalId = externalId,
                     CreatedAt = at,
-                    CompletedAt = at,
-                }, ct);
-                if (result.Status == DeliveryStatus.Succeeded)
+                    CompletedAt = mo.IsMicroExport ? at : null,
+                };
+                await repository.InsertDeliveryAsync(delivery, ct);
+                if (!mo.IsMicroExport && await RunImportAsync(integration, delivery, ct))
                 {
                     created++;
                 }
@@ -381,6 +404,8 @@ public sealed partial class IntegrationService(
                 EventType = $"{integration.Kind.ToString().ToLowerInvariant()}.sync",
                 Status = DeliveryStatus.Failed,
                 Attempts = 1,
+                HttpStatus = ex.HttpStatus,
+                NextAttemptAt = ex.HttpStatus == 429 ? clock.UtcNow.Add(ex.RetryAfter is { } delay && delay > TimeSpan.Zero ? delay : TimeSpan.FromMinutes(5)) : null,
                 Error = ex.Message,
                 CreatedAt = now,
                 CompletedAt = clock.UtcNow,
@@ -392,6 +417,32 @@ public sealed partial class IntegrationService(
 
     private sealed record ImportResult(DeliveryStatus Status, int HttpStatus, object Response, string? Error, Guid? InvoiceId);
 
+    private async Task<bool> RunImportAsync(Integration integration, IntegrationDelivery delivery, CancellationToken ct)
+    {
+        ImportResult result;
+        try
+        {
+            var order = JsonDefaults.Deserialize<InboundOrder>(UnprotectPayload(integration, delivery.RequestBody) ?? string.Empty);
+            result = await ImportAsync(integration, order, ct);
+        }
+        catch (Exception ex) when (ex is JsonException or CryptographicException or InvalidDataException)
+        {
+            await repository.FinishImportAsync(delivery, DeliveryStatus.Failed, 422, null, "Korunan sipariş verisi okunamadı.", null, clock.UtcNow, ct);
+            return false;
+        }
+
+        var success = result.Status == DeliveryStatus.Succeeded;
+        var now = clock.UtcNow;
+        var retry = !success && delivery.Attempts < Backoff.Length ? now.Add(Backoff[delivery.Attempts]) : (DateTimeOffset?)null;
+        await repository.FinishImportAsync(delivery, retry.HasValue ? DeliveryStatus.Pending : result.Status,
+            result.HttpStatus, result.InvoiceId, success ? null : "Sipariş faturaya aktarılamadı. Sipariş ve firma ayarlarını kontrol edin.", retry, now, ct);
+        return success;
+    }
+
+    private static string ExternalKey(string externalId) =>
+        externalId.Length <= 100 && !externalId.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase)
+            ? externalId : "sha256:" + Hashing.Sha256Hex(externalId);
+
     private async Task<ImportResult> ImportAsync(Integration integration, InboundOrder order, CancellationToken ct)
     {
         var now = clock.UtcNow;
@@ -400,16 +451,39 @@ public sealed partial class IntegrationService(
             return new ImportResult(DeliveryStatus.Failed, 422, new { error = "Siparişte satır yok." }, "Siparişte satır yok.", null);
         }
 
-        var key = $"int:{integration.Id:N}:{order.ExternalId}";
-        requestContext.SetUser(integration.TenantId, $"entegrasyon:{integration.Name}", null, $"GIBFramework-{integration.Kind}", null, [Roles.ApiClient]);
+        var rawKey = $"int:{integration.Id:N}:{order.ExternalId}";
+        var key = rawKey.Length <= 100 ? rawKey : $"integration-sha256:{Hashing.Sha256Hex(rawKey)}";
+        var externalId = ExternalKey(order.ExternalId);
+        var prior = (context.TenantId, context.UserId, context.Ip, context.UserAgent, context.CorrelationId, context.Roles, context.IsSystem);
+        requestContext.SetUser(integration.TenantId, $"entegrasyon:{integration.Name}", prior.Ip, $"GIBFramework-{integration.Kind}", prior.CorrelationId, [Roles.ApiClient]);
         try
         {
+            if (rawKey.Length > 100)
+            {
+                await using var connection = await connections.OpenForTenantAsync(integration.TenantId, ct);
+                var legacy = await legacyInvoices.GetByIdempotencyKeyAsync(connection, integration.TenantId, rawKey[..100], ct);
+                if (legacy is not null)
+                {
+                    // A pre-upgrade truncated key alone cannot prove which order owns the invoice.
+                    if (order.OrderNumber is not { Length: > 0 and <= 50 } number || string.IsNullOrEmpty(legacy.OrderNumber))
+                        throw new ConflictException("INTEGRATION_LEGACY_ORDER", "Eski sipariş eşleştirmesi doğrulanamadı.");
+                    if (StringComparer.Ordinal.Equals(legacy.OrderNumber, number))
+                    {
+                        key = rawKey[..100];
+                        var legacyExternalId = order.ExternalId.Length <= 100 ? order.ExternalId : order.ExternalId[..100];
+                        if (await repository.OrderExistsAsync(integration.TenantId, integration.Id, legacyExternalId, ct))
+                        {
+                            return Imported(legacy, false, null);
+                        }
+                    }
+                }
+            }
             var draft = await BuildDraftAsync(integration, order, ct);
-            var (invoice, created) = await invoices.CreateDraftAsync(draft, Truncate(key, 100), ct,
+            var (invoice, created) = await invoices.CreateDraftAsync(draft, key, ct,
                 new CustomerCardOptions(
                     (integration.Flag(IntegrationCatalog.SaveCustomer) || integration.Setting(IntegrationCatalog.SaveCustomer) is null) && draft.Customer.TaxId != AnonymousConsumer,
                     null));
-            await repository.LinkOrderAsync(integration.Id, Truncate(order.ExternalId, 100), integration.TenantId, invoice.Id, now, ct);
+            await repository.LinkOrderAsync(integration.Id, externalId, integration.TenantId, invoice.Id, now, ct);
             string? warning = null;
             if (created && (integration.Flag(IntegrationCatalog.AutoSubmit) || integration.Setting(IntegrationCatalog.AutoSubmit) is null))
             {
@@ -423,23 +497,31 @@ public sealed partial class IntegrationService(
                 }
             }
 
-            return new ImportResult(DeliveryStatus.Succeeded, created ? 201 : 200, new
-            {
-                ok = true,
-                created,
-                invoiceId = invoice.Id,
-                draftNumber = invoice.DraftNumber,
-                status = invoice.Status.ToString(),
-                documentType = invoice.DocumentType.ToString(),
-                warning,
-            }, warning, invoice.Id);
+            return Imported(invoice, created, warning);
         }
         catch (Exception ex) when (ex is ValidationFailedException or DomainException or ForbiddenOperationException or NotFoundException or ConflictException)
         {
             var details = ex is ValidationFailedException v ? string.Join(" | ", v.Details.DefaultIfEmpty(v.Message)) : ex.Message;
             return new ImportResult(DeliveryStatus.Failed, 422, new { error = ex.Message, details }, details, null);
         }
+        finally
+        {
+            if (prior.IsSystem) requestContext.UseSystem(prior.TenantId, prior.CorrelationId);
+            else requestContext.SetUser(prior.TenantId, prior.UserId, prior.Ip, prior.UserAgent, prior.CorrelationId, prior.Roles);
+        }
     }
+
+    private static ImportResult Imported(Invoice invoice, bool created, string? warning) =>
+        new(DeliveryStatus.Succeeded, created ? 201 : 200, new
+        {
+            ok = true,
+            created,
+            invoiceId = invoice.Id,
+            invoice.DraftNumber,
+            status = invoice.Status.ToString(),
+            documentType = invoice.DocumentType.ToString(),
+            warning,
+        }, warning, invoice.Id);
 
     public async Task RouteAsync(OutboxEventContext evt, CancellationToken ct)
     {
@@ -521,35 +603,40 @@ public sealed partial class IntegrationService(
         {
             if (delivery.EventType.EndsWith(".invoice_link", StringComparison.Ordinal) && IsMarketplace(integration.Kind))
             {
-                var link = JsonDefaults.Deserialize<MarketplaceInvoiceLink>(delivery.RequestBody ?? "{}");
+                var link = JsonDefaults.Deserialize<MarketplaceInvoiceLink>(UnprotectPayload(integration, delivery.RequestBody) ?? "{}");
                 response = await marketplaces.First(c => c.Kind == integration.Kind).SendInvoiceLinkAsync(integration, Secrets(integration), link, ct);
-                status = 200;
+                status = response.StartsWith("HTTP 409", StringComparison.Ordinal) ? 409 : 200;
             }
             else
             {
                 using var request = delivery.EventType == "woocommerce.order_note"
                     ? WooNoteRequest(integration, delivery)
                     : WebhookRequest(integration, delivery);
-                using var http = await httpFactory.CreateClient(HttpClientName).SendAsync(request, ct);
+                using var client = httpFactory.CreateClient(HttpClientName);
+                using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                deadline.CancelAfter(client.Timeout);
+                using var http = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
                 status = (int)http.StatusCode;
-                response = await http.Content.ReadAsStringAsync(ct);
                 if (!http.IsSuccessStatusCode)
                 {
                     var header = http.Headers.RetryAfter;
                     retryAfter = header?.Date ?? (header?.Delta is { } delay ? clock.UtcNow.Add(delay) : null);
                     throw new HttpRequestException($"Karşı sistem HTTP {status} döndürdü.");
                 }
+                // Response bodies are irrelevant once the receiver acknowledges the delivery.
             }
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException or UriFormatException or MarketplaceException)
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException or UriFormatException or MarketplaceException or CryptographicException or JsonException)
         {
+            status ??= (ex as MarketplaceException)?.HttpStatus;
             var uncertain = status is null && ex is HttpRequestException or TaskCanceledException;
-            var permanent = uncertain || ex is InvalidOperationException or UriFormatException || ex is MarketplaceException { Transient: false }
+            var permanent = uncertain || ex is InvalidOperationException or UriFormatException or CryptographicException or JsonException || ex is MarketplaceException { Transient: false }
                 || status is 400 or 401 or 403 or 404 or 410 or 422;
             DateTimeOffset? retry = !permanent && delivery.Attempts < Backoff.Length ? now.Add(Backoff[Math.Clamp(delivery.Attempts - 1, 0, Backoff.Length - 1)]) : null;
             retryAfter ??= ex is MarketplaceException { RetryAfter: { } delay } ? now.Add(delay) : null;
             if (retry is { } next && retryAfter is { } after && after > next) retry = after;
-            var error = uncertain ? "Teslimat sonucu belirsiz. Yeniden göndermeden önce sağlayıcı kaydını doğrulayın." : ex.Message;
+            var error = uncertain ? "Teslimat sonucu belirsiz. Yeniden göndermeden önce sağlayıcı kaydını doğrulayın."
+                : status is { } code ? $"Teslimat HTTP {code} ile sonuçlandı." : "Teslimat gerçekleştirilemedi.";
             Log.DeliveryFailed(logger, delivery.Id, error);
             await CompleteAsync(delivery, retry is null ? DeliveryStatus.Failed : DeliveryStatus.Pending, status, response, error, retry);
             return;
@@ -576,7 +663,7 @@ public sealed partial class IntegrationService(
     private HttpRequestMessage WebhookRequest(Integration integration, IntegrationDelivery delivery)
     {
         var url = SafeUri(integration.Setting(IntegrationCatalog.WebhookUrl) ?? throw new InvalidOperationException("Bildirim adresi tanımlı değil."));
-        var body = delivery.RequestBody ?? "{}";
+        var body = UnprotectPayload(integration, delivery.RequestBody) ?? "{}";
         var timestamp = clock.UtcNow.ToUnixTimeSeconds().ToString(System.Globalization.CultureInfo.InvariantCulture);
         var secret = Secrets(integration).GetValueOrDefault(IntegrationCatalog.SigningSecret) ?? string.Empty;
         var request = new HttpRequestMessage(HttpMethod.Post, url) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
@@ -597,7 +684,7 @@ public sealed partial class IntegrationService(
             throw new InvalidOperationException("WooCommerce REST API anahtarı (Consumer key / secret) girilmemiş.");
         }
 
-        using var doc = JsonDocument.Parse(delivery.RequestBody ?? "{}");
+        using var doc = JsonDocument.Parse(UnprotectPayload(integration, delivery.RequestBody) ?? "{}");
         var orderId = doc.RootElement.GetProperty("orderId").GetString();
         var store = (integration.Setting("storeUrl") ?? throw new InvalidOperationException("Mağaza adresi tanımlı değil.")).TrimEnd('/');
         var url = SafeUri($"{store}/wp-json/wc/v3/orders/{Uri.EscapeDataString(orderId ?? string.Empty)}/notes");
@@ -640,12 +727,20 @@ public sealed partial class IntegrationService(
             Direction = DeliveryDirection.Out,
             EventType = eventType,
             Status = DeliveryStatus.Pending,
-            RequestBody = body,
+            RequestBody = ProtectPayload(integration, body),
             InvoiceId = invoiceId,
             ExternalId = externalId,
             CreatedAt = now,
             NextAttemptAt = now,
         }, ct);
+
+    private string ProtectPayload(Integration integration, string body) =>
+        "protected:" + _deliveryProtector.CreateProtector(integration.TenantId.ToString("N"), integration.Id.ToString("N")).Protect(body);
+
+    private string? UnprotectPayload(Integration integration, string? body) =>
+        body is not null && body.StartsWith("protected:", StringComparison.Ordinal)
+            ? _deliveryProtector.CreateProtector(integration.TenantId.ToString("N"), integration.Id.ToString("N")).Unprotect(body["protected:".Length..])
+            : body;
 
     private static object Payload(OutboxEventContext evt, string? orderId)
     {

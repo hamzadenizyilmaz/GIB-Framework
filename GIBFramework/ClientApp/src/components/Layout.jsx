@@ -1,40 +1,41 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router';
 import { api, LOGO_EVENT } from '../api.js';
 import { ROLE_LABELS } from '../format.js';
 import { useSession } from '../session.jsx';
 import { useLoad, useToast } from './ui.jsx';
-import { LegalStrip } from './Brand.jsx';
+import { Brand, LegalStrip } from './Brand.jsx';
+import { Icon } from './Icon.jsx';
 import { readAppearance, resolvedTheme, saveAppearance } from '../theme.js';
 
 export const MENU = [
-  { to: '/', icon: 'speedometer2', label: 'Panel', end: true },
+  { to: '/', icon: 'panel', label: 'Panel', end: true },
   {
-    label: 'Faturalar', icon: 'receipt', items: [
+    label: 'Faturalar', icon: 'invoices', items: [
       { to: '/invoices', icon: 'list-ul', label: 'Tüm faturalar', policy: 'InvoiceRead' },
       { to: '/invoices/new', icon: 'plus-circle', label: 'Yeni fatura', policy: 'InvoiceCreate' },
       { to: '/incoming', icon: 'inbox', label: 'Gelen faturalar', policy: 'IncomingManage' },
     ],
   },
   {
-    label: 'Kayıtlar', icon: 'journal-bookmark', items: [
+    label: 'Kayıtlar', icon: 'users', items: [
       { to: '/customers', icon: 'person-vcard', label: 'Cari kartlar', policy: 'InvoiceRead' },
       { to: '/products', icon: 'box-seam', label: 'Ürün & hizmetler', policy: 'InvoiceRead' },
     ],
   },
   {
-    label: 'GİB', icon: 'bank', items: [
+    label: 'GİB', icon: 'shield', items: [
       { to: '/gib-portal', icon: 'plug', label: 'e-Arşiv Portal bağlantısı', policy: 'GibPortal' },
       { to: '/gib-portal/documents', icon: 'files', label: 'Portal belgeleri', policy: 'GibPortal' },
     ],
   },
   {
-    label: 'Mevzuat', icon: 'journal-check', items: [
+    label: 'Mevzuat', icon: 'rules', items: [
       { to: '/compliance', icon: 'journal-text', label: 'Mevzuat & uyum' },
       { to: '/tax-offices', icon: 'building', label: 'Vergi daireleri' },
     ],
   },
-  { to: '/settings', icon: 'gear', label: 'Ayarlar' },
+  { to: '/settings', icon: 'settings', label: 'Ayarlar' },
 ];
 
 function useDropdown() {
@@ -44,13 +45,22 @@ function useDropdown() {
   useEffect(() => { setOpen(false); }, [location.pathname]);
   useEffect(() => {
     if (!open) return undefined;
-    const onDown = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
-    const onKey = (e) => e.key === 'Escape' && setOpen(false);
-    document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
+    const closeOutside = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const onKey = (e) => {
+      if (e.key === 'Escape' && ref.current?.contains(e.target)) {
+        e.preventDefault();
+        setOpen(false);
+        ref.current.querySelector('button[aria-expanded]')?.focus();
+      }
+    };
+    document.addEventListener('pointerdown', closeOutside);
+    document.addEventListener('focusin', closeOutside);
+    ref.current?.addEventListener('keydown', onKey);
+    const menu = ref.current;
     return () => {
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('pointerdown', closeOutside);
+      document.removeEventListener('focusin', closeOutside);
+      menu?.removeEventListener('keydown', onKey);
     };
   }, [open]);
   return { open, setOpen, ref };
@@ -58,17 +68,18 @@ function useDropdown() {
 
 function NavDropdown({ entry }) {
   const { open, setOpen, ref } = useDropdown();
+  const id = useId();
   const location = useLocation();
   const active = entry.items.some((i) => location.pathname === i.to || (i.to !== '/' && location.pathname.startsWith(`${i.to}/`)));
   return (
     <li className={`nav-item dropdown ${open ? 'show' : ''}`} ref={ref}>
-      <button type="button" className={`nav-link dropdown-toggle ${active ? 'active' : ''}`} aria-expanded={open} onClick={() => setOpen(!open)}>
-        <i className={`bi bi-${entry.icon} me-1`} />{entry.label}
+      <button type="button" className={`nav-link ${active ? 'active' : ''}`} aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)}>
+        <Icon name={entry.icon} />{entry.label}
       </button>
-      <ul className={`dropdown-menu shadow-sm ${open ? 'show' : ''}`}>
+      <ul id={id} className={`dropdown-menu shadow-sm ${open ? 'show' : ''}`}>
         {entry.items.map((i) => (
           <li key={i.to}>
-            <NavLink className="dropdown-item" to={i.to} end><i className={`bi bi-${i.icon} me-2 text-body-secondary`} />{i.label}</NavLink>
+            <NavLink className="dropdown-item" to={i.to} end><i className={`bi bi-${i.icon} me-2 text-body-secondary`} aria-hidden="true" />{i.label}</NavLink>
           </li>
         ))}
       </ul>
@@ -76,22 +87,15 @@ function NavDropdown({ entry }) {
   );
 }
 
-function ApiMenu() {
-  const { open, setOpen, ref } = useDropdown();
+function ApiLinks() {
   const session = useSession();
   return (
-    <div className="dropdown" ref={ref}>
-      <button type="button" className="btn btn-sm btn-outline-primary btn-pill dropdown-toggle px-3" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <i className="bi bi-code-slash me-1" />API
-      </button>
-      <ul className={`dropdown-menu dropdown-menu-end shadow ${open ? 'show' : ''}`} style={{ right: 0 }}>
+    <>
         <li><a className="dropdown-item" href="/swagger" target="_blank" rel="noopener noreferrer"><i className="bi bi-braces me-2" />Swagger UI</a></li>
         <li><a className="dropdown-item" href="/redoc" target="_blank" rel="noopener noreferrer"><i className="bi bi-book me-2" />API dokümantasyonu (ReDoc)</a></li>
-        <li><hr className="dropdown-divider" /></li>
-        <li><Link className="dropdown-item" to="/developers" onClick={() => setOpen(false)}><i className="bi bi-code-square me-2" />Geliştirici dokümanı</Link></li>
-        {session.can('ApiKeyManage') && <li><Link className="dropdown-item" to="/settings/api-keys" onClick={() => setOpen(false)}><i className="bi bi-key me-2" />API anahtarları</Link></li>}
-      </ul>
-    </div>
+        <li><Link className="dropdown-item" to="/developers"><i className="bi bi-code-square me-2" />Geliştirici dokümanı</Link></li>
+        {session.can('ApiKeyManage') && <li><Link className="dropdown-item" to="/settings/api-keys"><i className="bi bi-key me-2" />API anahtarları</Link></li>}
+    </>
   );
 }
 
@@ -121,12 +125,13 @@ function ThemeToggle() {
   const [theme, setTheme] = useState(() => resolvedTheme(readAppearance().theme));
   const next = theme === 'dark' ? 'light' : 'dark';
   return (
-    <button type="button" className="btn btn-sm user-chip theme-toggle" title={next === 'dark' ? 'Koyu tema' : 'Açık tema'} aria-label={next === 'dark' ? 'Koyu temaya geç' : 'Açık temaya geç'}
+    <button type="button" className="dropdown-item" title={next === 'dark' ? 'Koyu tema' : 'Açık tema'}
       onClick={() => {
         saveAppearance({ ...readAppearance(), theme: next });
         setTheme(next);
       }}>
-      <i className={`bi bi-${theme === 'dark' ? 'sun' : 'moon-stars'}`} />
+      <i className={`bi bi-${theme === 'dark' ? 'sun' : 'moon-stars'} me-2`} aria-hidden="true" />
+      {next === 'dark' ? 'Koyu temaya geç' : 'Açık temaya geç'}
     </button>
   );
 }
@@ -156,35 +161,52 @@ function UserMenu() {
   const navigate = useNavigate();
   const { open, setOpen, ref } = useDropdown();
   const p = session.permissions;
-  const initials = (p.displayName || p.userId || '?').split(' ').map((x) => x[0]).join('').slice(0, 2).toLocaleUpperCase('tr-TR');
   return (
     <div className="dropdown" ref={ref}>
       <button className="btn btn-sm user-chip d-flex align-items-center gap-2" type="button" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <span className="avatar">{initials}</span>
-        <span className="d-none d-xl-inline text-start lh-sm">
-          <span className="d-block fw-semibold">{p.displayName || p.userId}</span>
-          <span className="d-block opacity-75 small">{session.tenant?.name || ROLE_LABELS[p.roles[0]] || p.roles[0]}</span>
-        </span>
-        <i className="bi bi-chevron-down small" />
+        <span className="app-account-icon"><Icon name="person" /></span>
+        Hesabım
+        <Icon name="chevron" />
       </button>
       <ul className={`dropdown-menu dropdown-menu-end shadow ${open ? 'show' : ''}`} style={{ right: 0, minWidth: '16rem' }}>
         <li className="px-3 py-2">
           <div className="fw-semibold">{p.displayName || p.userId}</div>
+          {session.tenant?.name && <div className="small">{session.tenant.name}</div>}
           <div className="small text-body-secondary">{p.roles.map((r) => ROLE_LABELS[r] || r).join(', ')}</div>
         </li>
+        {session.hasRole('PlatformSuperAdmin') && <li className="px-3 py-2"><TenantSwitcher /></li>}
         <li><hr className="dropdown-divider" /></li>
         <li><Link className="dropdown-item" to="/settings/account" onClick={() => setOpen(false)}><i className="bi bi-person-gear me-2" />Hesabım ve güvenlik</Link></li>
         <li><Link className="dropdown-item" to="/settings/appearance" onClick={() => setOpen(false)}><i className="bi bi-palette me-2" />Görünüm</Link></li>
         <li><Link className="dropdown-item" to="/settings" onClick={() => setOpen(false)}><i className="bi bi-gear me-2" />Ayarlar</Link></li>
+        <li><ThemeToggle /></li>
+        <li><hr className="dropdown-divider" /></li>
+        <ApiLinks />
+        <li><hr className="dropdown-divider" /></li>
         <li>
           <button className="dropdown-item text-danger" type="button" onClick={async () => {
             setOpen(false);
             await session.logout();
             navigate('/login');
-          }}><i className="bi bi-box-arrow-right me-2" />Çıkış</button>
+          }}><i className="bi bi-box-arrow-right me-2" aria-hidden="true" />Çıkış</button>
         </li>
       </ul>
     </div>
+  );
+}
+
+function InvoiceSearch() {
+  const navigate = useNavigate();
+  const [query, setQuery] = useState('');
+  return (
+    <form className="app-search" role="search" onSubmit={(event) => {
+      event.preventDefault();
+      const q = query.trim();
+      if (q) navigate({ pathname: '/invoices', search: new URLSearchParams({ q }).toString() });
+    }}>
+      <Icon name="search" />
+      <input className="form-control" type="search" aria-label="Faturalarda ara" placeholder="Ara…" maxLength={100} value={query} onChange={(event) => setQuery(event.target.value)} />
+    </form>
   );
 }
 
@@ -192,6 +214,7 @@ export function Layout({ children }) {
   const session = useSession();
   const [collapsed, setCollapsed] = useState(true);
   const location = useLocation();
+  const menuToggle = useRef(null);
   useEffect(() => {
     setCollapsed(true);
     window.scrollTo(0, 0);
@@ -203,36 +226,43 @@ export function Layout({ children }) {
 
   return (
     <div className="app-shell">
-      <nav className="navbar navbar-expand-xl app-navbar sticky-top" aria-label="Ana menü">
+      <a className="visually-hidden-focusable app-skip" href="#app-main" onClick={(event) => {
+        event.preventDefault();
+        document.getElementById('app-main')?.focus();
+      }}>Ana içeriğe geç</a>
+      <nav className="navbar navbar-expand-xl app-navbar sticky-top" aria-label="Ana menü" onKeyDown={(event) => {
+        if (event.key === 'Escape' && !event.defaultPrevented && !collapsed) {
+          setCollapsed(true);
+          menuToggle.current?.focus();
+        }
+      }}>
         <div className="container-fluid px-3 px-xl-4">
-          <Link className="navbar-brand d-flex align-items-center gap-2 fw-bold" to="/">
-            <span className="app-brand-icon"><i className="bi bi-receipt-cutoff" /></span>
-            GIB Framework
-          </Link>
-          <TenantLogo />
-          <button className="navbar-toggler" type="button" aria-controls="app-nav" aria-expanded={!collapsed} aria-label="Menüyü aç/kapat" onClick={() => setCollapsed(!collapsed)}>
-            <span className="navbar-toggler-icon" />
+          <div className="app-nav-brand">
+            <Link className="navbar-brand" to="/"><Brand /></Link>
+            <TenantLogo />
+          </div>
+          <button ref={menuToggle} className="navbar-toggler" type="button" aria-controls="app-nav" aria-expanded={!collapsed} aria-label="Menüyü aç/kapat" onClick={() => setCollapsed(!collapsed)}>
+            <Icon name="menu" />
           </button>
           <div className={`collapse navbar-collapse ${collapsed ? '' : 'show'}`} id="app-nav">
-            <ul className="navbar-nav me-auto mb-2 mb-xl-0">
+            <ul className="navbar-nav app-primary-nav mb-2 mb-xl-0">
               {visible.map((e) => (e.items
                 ? <NavDropdown key={e.label} entry={e} />
                 : (
                   <li className="nav-item" key={e.to}>
-                    <NavLink className="nav-link" to={e.to} end={e.end}><i className={`bi bi-${e.icon} me-1`} />{e.label}</NavLink>
+                    <NavLink className="nav-link" to={e.to} end={e.end}><Icon name={e.icon} />{e.label}</NavLink>
                   </li>
                 )))}
             </ul>
-            <div className="d-flex flex-wrap align-items-center gap-2 pb-2 pb-xl-0">
-              {session.hasRole('PlatformSuperAdmin') && <TenantSwitcher />}
-              <ThemeToggle />
-              <ApiMenu />
+            <div className="app-nav-tools d-flex flex-wrap align-items-center gap-2 pb-2 pb-xl-0">
+              {session.can('InvoiceRead') && session.tenant && <InvoiceSearch />}
+              {session.can('GibPortal') && session.tenant && <Link className="btn btn-primary app-test-link" to="/gib-portal?test-user=1"><Icon name="test" />Test Kullanıcı Al</Link>}
               <UserMenu />
             </div>
           </div>
         </div>
       </nav>
-      <main className="app-content container-fluid px-3 px-xl-4" tabIndex={-1}>{children}</main>
+      <main id="app-main" className="app-content container-fluid" tabIndex={-1}>{children}</main>
       <LegalStrip />
     </div>
   );

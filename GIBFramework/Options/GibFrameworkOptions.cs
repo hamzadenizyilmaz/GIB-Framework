@@ -85,7 +85,7 @@ public sealed class WorkflowOptions
 
     public bool RequireMakerChecker { get; set; } = true;
 
-    public string[] SelfApprovalRoles { get; set; } = [];
+    public string[] SelfApprovalRoles { get; set; } = [Roles.PlatformSuperAdmin, Roles.TenantOwner];
 }
 
 public enum SigningMode

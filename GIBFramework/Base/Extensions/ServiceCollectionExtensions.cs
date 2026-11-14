@@ -337,7 +337,7 @@ public static class ServiceCollectionExtensions
                     }
 
                     var current = await ctx.HttpContext.RequestServices.GetRequiredService<IUserRepository>()
-                        .GetSecurityStampAsync(userCode, ctx.HttpContext.RequestAborted);
+                        .GetSecurityStampAsync(userCode, ctx.HttpContext.RequestAborted, localMode ? null : DemoDataSeeder.TenantTaxId);
                     if (current?.ToString("N") != stamp)
                     {
                         ctx.Fail("Oturum geçersiz kılındı.");

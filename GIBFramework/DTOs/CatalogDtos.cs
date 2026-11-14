@@ -104,6 +104,18 @@ public sealed record TenantSettingsRequest
 
 public sealed record UpdateCompanyRequest
 {
+    [StringLength(30)]
+    public string? Fax { get; init; }
+
+    [Url, StringLength(200)]
+    public string? Website { get; init; }
+
+    [StringLength(30)]
+    public string? TradeRegistryNumber { get; init; }
+
+    [RegularExpression("^[0-9]{16}$")]
+    public string? MersisNumber { get; init; }
+
     [Required, StringLength(250)]
     public string Name { get; init; } = string.Empty;
 

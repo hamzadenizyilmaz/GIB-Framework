@@ -6,17 +6,19 @@ using System.Text;
 using System.Text.Json;
 using System.Xml.Linq;
 using GIBFramework.Models.Integrations;
+using GIBFramework.Infrastructure;
 
 namespace GIBFramework.Services.Integrations;
 
-public sealed record MarketplaceOrder(InboundOrder Order, string Raw, bool IsMicroExport = false);
+public sealed record MarketplaceOrder(InboundOrder Order, bool IsMicroExport = false);
 
 public sealed record MarketplaceInvoiceLink(string ExternalId, string? OrderNumber, string Link, string DocumentNumber, DateTimeOffset IssuedAt);
 
-public sealed class MarketplaceException(string message, bool transient = false, TimeSpan? retryAfter = null) : Exception(message)
+public sealed class MarketplaceException(string message, bool transient = false, TimeSpan? retryAfter = null, int? httpStatus = null) : Exception(message)
 {
     public bool Transient { get; } = transient;
     public TimeSpan? RetryAfter { get; } = retryAfter;
+    public int? HttpStatus { get; } = httpStatus;
 }
 
 public interface IMarketplaceClient
@@ -36,23 +38,12 @@ public abstract class MarketplaceClientBase(IHttpClientFactory httpFactory)
     protected async Task<(int Status, string Body)> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
-        HttpResponseMessage response;
+        using var client = httpFactory.CreateClient(HttpClientName);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(client.Timeout);
         try
         {
-            response = await httpFactory.CreateClient(HttpClientName).SendAsync(request, ct);
-        }
-        catch (HttpRequestException ex)
-        {
-            throw new MarketplaceException("Pazaryeri API'sine bağlanılamadı: " + ex.Message, transient: true);
-        }
-        catch (TaskCanceledException) when (!ct.IsCancellationRequested)
-        {
-            throw new MarketplaceException("Pazaryeri API'si zamanında yanıt vermedi.", transient: true);
-        }
-
-        using (response)
-        {
-            var body = await response.Content.ReadAsStringAsync(ct);
+            using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
             var status = (int)response.StatusCode;
             switch (status)
             {
@@ -61,12 +52,24 @@ public abstract class MarketplaceClientBase(IHttpClientFactory httpFactory)
                 case 429:
                     var retry = response.Headers.RetryAfter;
                     throw new MarketplaceException("Pazaryeri istek sınırı aşıldı (HTTP 429).", transient: true,
-                        retryAfter: retry?.Delta ?? (retry?.Date is { } date ? date - DateTimeOffset.UtcNow : null));
+                        retryAfter: retry?.Delta ?? (retry?.Date is { } date ? date - DateTimeOffset.UtcNow : null), httpStatus: 429);
                 case >= 500:
                     throw new MarketplaceException($"Pazaryeri API'si HTTP {status} döndürdü.", transient: true);
             }
 
-            return (status, body);
+            return (status, await BoundedHttpContent.ReadAsync(response.Content, 12 * 1024 * 1024, deadline.Token));
+        }
+        catch (HttpRequestException)
+        {
+            throw new MarketplaceException("Pazaryeri API'sine bağlanılamadı.", transient: true);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new MarketplaceException("Pazaryeri API'si zamanında yanıt vermedi.", transient: true);
+        }
+        catch (InvalidDataException ex)
+        {
+            throw new MarketplaceException(ex.Message);
         }
     }
 
@@ -240,7 +243,7 @@ public sealed class TrendyolClient(IHttpClientFactory httpFactory, MarketplaceOp
 
                 foreach (var p in Arr(root, "content"))
                 {
-                    list.Add(new MarketplaceOrder(Map(integration, p), p.GetRawText(),
+                    list.Add(new MarketplaceOrder(Map(integration, p),
                         Str(p, "micro", "microExport", "isMicroExport") is "true" or "1"));
                 }
                 if (page + 1 >= totalPages) return;
@@ -283,22 +286,42 @@ public sealed class TrendyolClient(IHttpClientFactory httpFactory, MarketplaceOp
         ArgumentNullException.ThrowIfNull(integration);
         ArgumentNullException.ThrowIfNull(link);
         var sellerId = Require(integration, "sellerId", "Satıcı ID");
+        if (!long.TryParse(link.ExternalId, NumberStyles.None, Inv, out var packageId) || packageId <= 0)
+            throw new MarketplaceException("Trendyol paket kimliği geçersiz.");
         using var request = Request(HttpMethod.Post, $"{Base(integration)}/integration/sellers/{Uri.EscapeDataString(sellerId)}/seller-invoice-links", integration, secrets);
         var body = JsonSerializer.Serialize(new
         {
             invoiceLink = link.Link,
-            shipmentPackageId = long.TryParse(link.ExternalId, NumberStyles.Integer, Inv, out var packageId) ? packageId : 0,
+            shipmentPackageId = packageId,
             invoiceDateTime = link.IssuedAt.ToUnixTimeMilliseconds(),
             invoiceNumber = link.DocumentNumber,
         });
         request.Content = new StringContent(body, Encoding.UTF8, "application/json");
-        var (status, response) = await SendAsync(request, ct);
-        return status switch
+        var (status, _) = await SendAsync(request, ct);
+        if (status is 200 or 201 or 202 or 204) return $"HTTP {status}";
+        if (status == 409)
         {
-            200 or 201 or 202 or 204 => $"HTTP {status}",
-            409 => "HTTP 409: paket için fatura zaten kayıtlı",
-            _ => throw new MarketplaceException($"Trendyol fatura linki HTTP {status}: {Short(response)}"),
-        };
+            using var verify = Request(HttpMethod.Get,
+                $"{Base(integration)}/integration/order/sellers/{Uri.EscapeDataString(sellerId)}/v2/orders?shipmentPackageIds={packageId.ToString(Inv)}",
+                integration, secrets);
+            var (verificationStatus, verification) = await SendAsync(verify, ct);
+            if (verificationStatus == 200)
+            {
+                try
+                {
+                    using var json = JsonDocument.Parse(verification);
+                    if (Arr(json.RootElement, "content").Any(p => Str(p, "id", "shipmentPackageId") == packageId.ToString(Inv)
+                        && string.Equals(Str(p, "invoiceLink"), link.Link, StringComparison.Ordinal)))
+                        return "HTTP 409: paket ve fatura bağlantısı doğrulandı";
+                }
+                catch (JsonException)
+                {
+                    throw new MarketplaceException("Trendyol paket doğrulama yanıtı okunamadı.", httpStatus: 409);
+                }
+            }
+            throw new MarketplaceException("Trendyol HTTP 409: paket ile fatura bağlantısı doğrulanamadı.", httpStatus: 409);
+        }
+        throw new MarketplaceException($"Trendyol fatura bağlantısı HTTP {status}.");
     }
 
     internal static string Short(string body) => body.Length > 300 ? body[..300] : body;
@@ -348,7 +371,7 @@ public sealed class HepsiburadaClient(IHttpClientFactory httpFactory, Marketplac
             {
                 if (Map(integration, p) is { } order)
                 {
-                    list.Add(new MarketplaceOrder(order, p.GetRawText(), Str(p, "micro", "microExport", "isMicroExport") is "true" or "1"));
+                    list.Add(new MarketplaceOrder(order, Str(p, "micro", "microExport", "isMicroExport") is "true" or "1"));
                 }
             }
 
@@ -444,7 +467,7 @@ public sealed class N11Client(IHttpClientFactory httpFactory, MarketplaceOptions
             {
                 if (Map(integration, p) is { } order)
                 {
-                    list.Add(new MarketplaceOrder(order, p.GetRawText(), Str(p, "micro", "microExport", "isMicroExport") is "true" or "1"));
+                    list.Add(new MarketplaceOrder(order, Str(p, "micro", "microExport", "isMicroExport") is "true" or "1"));
                 }
             }
 

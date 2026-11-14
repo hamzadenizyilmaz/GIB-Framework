@@ -149,7 +149,23 @@ public sealed class FileSystemEvidenceVault(string rootPath, IClock clock) : IEv
         var stageDir = Directory.EnumerateDirectories(documentDir, $"{sequence:D4}-*")
             .FirstOrDefault(dir => File.Exists(Path.Combine(dir, ManifestFile)));
         var path = stageDir is null ? null : Path.Combine(stageDir, name);
-        return path is not null && File.Exists(path) ? await File.ReadAllBytesAsync(path, cancellationToken) : null;
+        if (path is null || !File.Exists(path))
+            return null;
+
+        var manifest = JsonDefaults.Deserialize<EvidenceManifest>(
+            await File.ReadAllTextAsync(Path.Combine(stageDir!, ManifestFile), cancellationToken));
+        var expected = manifest.Artifacts.FirstOrDefault(artifact => artifact.Name == name);
+        if (manifest.TenantId != tenantId || manifest.DocumentId != documentId || manifest.Sequence != sequence
+            || manifest.ManifestHash != manifest.ComputeHash() || expected is null)
+        {
+            throw new InvalidDataException("Belgenin kanıt kaydı doğrulanamadı.");
+        }
+
+        var content = await File.ReadAllBytesAsync(path, cancellationToken);
+        if (content.LongLength != expected.Size || Hashing.Sha256Hex(content) != expected.Sha256)
+            throw new InvalidDataException("Kanıt dosyasının bütünlüğü doğrulanamadı.");
+
+        return content;
     }
 
     public async Task<EvidenceVerification> VerifyAsync(Guid tenantId, Guid documentId, CancellationToken cancellationToken)
@@ -172,14 +188,14 @@ public sealed class FileSystemEvidenceVault(string rootPath, IClock clock) : IEv
 
             foreach (var a in m.Artifacts)
             {
-                var content = await ReadAsync(tenantId, documentId, m.Sequence, a.Name, cancellationToken);
-                if (content is null)
+                try
                 {
-                    problems.Add($"#{m.Sequence} {a.Name}: dosya eksik.");
+                    if (await ReadAsync(tenantId, documentId, m.Sequence, a.Name, cancellationToken) is null)
+                        problems.Add($"#{m.Sequence} {a.Name}: dosya eksik.");
                 }
-                else if (Hashing.Sha256Hex(content) != a.Sha256)
+                catch (InvalidDataException ex)
                 {
-                    problems.Add($"#{m.Sequence} {a.Name}: dosya içeriği değiştirilmiş (SHA-256 uyuşmuyor).");
+                    problems.Add($"#{m.Sequence} {a.Name}: {ex.Message}");
                 }
             }
 

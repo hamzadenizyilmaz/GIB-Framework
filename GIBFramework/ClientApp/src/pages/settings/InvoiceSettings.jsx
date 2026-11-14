@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router';
 import { api, uuid } from '../../api.js';
 import { fmtDate, UNITS } from '../../format.js';
 import { useSession } from '../../session.jsx';
@@ -15,7 +16,7 @@ function useEditable(source) {
 }
 
 function SaveButton({ onSave, canEdit }) {
-  return canEdit ? <BusyButton className="btn btn-primary btn-pill px-4" onClick={onSave}><i className="bi bi-save me-1" />Kaydet</BusyButton> : null;
+  return canEdit ? <BusyButton className="btn btn-primary btn-pill px-4" onClick={onSave}><i className="bi bi-save me-1" aria-hidden="true" />Kaydet</BusyButton> : null;
 }
 
 const updatedText = (s) => (s?.updatedAt ? `Son güncelleme: ${fmtDate(s.updatedAt)} · ${s.updatedBy}` : null);
@@ -26,7 +27,6 @@ function DefaultsPage() {
   const { data: defs } = useLoad(() => api.get('/api/v1/compliance/tax-definitions').catch(() => ({ vatRates: [20, 10, 1, 0] })), []);
   const [d, setD] = useEditable(settings.data?.defaults);
   const [error, setError] = useState(null);
-  if (settings.loading || !d || !defs) return <Spinner />;
   const set = (name, value) => setD((x) => ({ ...x, [name]: value }));
 
   const save = async () => {
@@ -40,43 +40,54 @@ function DefaultsPage() {
   };
 
   return (
-    <SettingsLayout icon="receipt" title="Fatura varsayılanları" subtitle={updatedText(settings.data)} actions={<SaveButton onSave={save} canEdit={settings.canEdit} />}>
-      <ErrorAlert error={error} />
-      <Card>
-        <fieldset disabled={!settings.canEdit} className="row g-3">
-          <div className="col-md-6">
-            <label className="form-label" htmlFor="d-profile">e-Fatura senaryosu</label>
-            <select className="form-select" id="d-profile" value={d.profile} onChange={(e) => set('profile', e.target.value)}>
-              <option value="TEMELFATURA">Temel fatura</option>
-              <option value="TICARIFATURA">Ticari fatura</option>
-            </select>
-          </div>
-          <div className="col-md-6">
-            <label className="form-label" htmlFor="d-cur">Para birimi</label>
-            <select className="form-select" id="d-cur" value={d.currency} onChange={(e) => set('currency', e.target.value)}>{CURRENCIES.map((c) => <option key={c}>{c}</option>)}</select>
-          </div>
-          <div className="col-md-4">
-            <label className="form-label" htmlFor="d-vat">KDV oranı</label>
-            <select className="form-select" id="d-vat" value={String(Number(d.vatRate))} onChange={(e) => set('vatRate', e.target.value)}>
-              {defs.vatRates.map((r) => <option key={r} value={String(r)}>%{r}</option>)}
-            </select>
-          </div>
-          <div className="col-md-4">
-            <label className="form-label" htmlFor="d-unit">Birim</label>
-            <select className="form-select" id="d-unit" value={d.unitCode} onChange={(e) => set('unitCode', e.target.value)}>{UNITS.map(([c, l]) => <option key={c} value={c}>{l}</option>)}</select>
-          </div>
-          <div className="col-md-4">
-            <label className="form-label" htmlFor="d-due">Vade (gün)</label>
-            <input className="form-control" id="d-due" type="number" min="0" max="3650" value={d.paymentDueDays ?? ''} onChange={(e) => set('paymentDueDays', e.target.value)} />
-          </div>
-          <div className="col-12">
-            <div className="form-check form-switch">
-              <input className="form-check-input" type="checkbox" role="switch" id="d-save" checked={d.saveCustomer} onChange={(e) => set('saveCustomer', e.target.checked)} />
-              <label className="form-check-label" htmlFor="d-save">Alıcıyı cari kart olarak kaydet</label>
+    <SettingsLayout icon="receipt" title="Fatura varsayılanları" subtitle="Senaryo, para birimi, KDV, birim, vade ve kayıt tercihleri" actions={<SaveButton onSave={save} canEdit={settings.canEdit && Boolean(d)} />}>
+      <ErrorAlert error={error || settings.error} />
+      {!settings.error && (settings.loading || !d || !defs) && <Spinner />}
+      {d && defs && <div className="d-grid gap-4">
+        <Card title="Belge oluşturma varsayılanları">
+          <fieldset disabled={!settings.canEdit} className="row g-4">
+            <div className="col-md-6">
+              <label className="form-label" htmlFor="d-profile">e-Fatura senaryosu</label>
+              <select className="form-select" id="d-profile" value={d.profile} onChange={(e) => set('profile', e.target.value)}>
+                <option value="TEMELFATURA">Temel fatura</option>
+                <option value="TICARIFATURA">Ticari fatura</option>
+              </select>
             </div>
+            <div className="col-md-6">
+              <label className="form-label" htmlFor="d-cur">Para birimi</label>
+              <select className="form-select" id="d-cur" value={d.currency} onChange={(e) => set('currency', e.target.value)}>{CURRENCIES.map((c) => <option key={c}>{c}</option>)}</select>
+            </div>
+            <div className="col-md-6">
+              <label className="form-label" htmlFor="d-vat">KDV oranı</label>
+              <select className="form-select" id="d-vat" value={String(Number(d.vatRate))} onChange={(e) => set('vatRate', e.target.value)}>
+                {defs.vatRates.map((r) => <option key={r} value={String(r)}>%{r}</option>)}
+              </select>
+            </div>
+            <div className="col-md-6">
+              <label className="form-label" htmlFor="d-unit">Birim</label>
+              <select className="form-select" id="d-unit" value={d.unitCode} onChange={(e) => set('unitCode', e.target.value)}>{UNITS.map(([c, l]) => <option key={c} value={c}>{l}</option>)}</select>
+            </div>
+            <div className="col-md-6">
+              <label className="form-label" htmlFor="d-due">Vade (gün)</label>
+              <input className="form-control" id="d-due" type="number" min="0" max="3650" value={d.paymentDueDays ?? ''} onChange={(e) => set('paymentDueDays', e.target.value)} />
+            </div>
+            <div className="col-12">
+              <div className="form-check form-switch">
+                <input className="form-check-input" type="checkbox" role="switch" id="d-save" checked={d.saveCustomer} onChange={(e) => set('saveCustomer', e.target.checked)} />
+                <label className="form-check-label" htmlFor="d-save">Alıcıyı cari kart olarak kaydet</label>
+              </div>
+            </div>
+          </fieldset>
+        </Card>
+        <Card title="Yeni belge önizlemesi">
+          <div className="d-flex flex-wrap gap-2">
+            <span className="badge text-bg-success">{d.profile}</span>
+            <span className="badge text-bg-secondary">{d.currency}</span>
+            <span className="badge text-bg-secondary">KDV %{d.vatRate}</span>
           </div>
-        </fieldset>
-      </Card>
+          {updatedText(settings.data) && <div className="form-text mt-3">{updatedText(settings.data)}</div>}
+        </Card>
+      </div>}
     </SettingsLayout>
   );
 }
@@ -86,8 +97,15 @@ function NotesPage() {
   const settings = useTenantSettings();
   const [list, setList] = useEditable(settings.data?.noteTemplates);
   const [error, setError] = useState(null);
-  if (settings.loading || !list) return <Spinner />;
+  const [selectedId, setSelectedId] = useState(null);
+  const selected = list?.find((item) => item.id === selectedId) || list?.[0];
   const update = (id, patch) => setList((l) => l.map((n) => (n.id === id ? { ...n, ...patch } : n)));
+
+  const add = () => {
+    const id = `new-${uuid()}`;
+    setList((l) => [...l, { id, title: '', text: '', autoAdd: false }]);
+    setSelectedId(id);
+  };
 
   const save = async () => {
     try {
@@ -101,40 +119,50 @@ function NotesPage() {
   };
 
   return (
-    <SettingsLayout icon="sticky" title="Not şablonları" subtitle={updatedText(settings.data)}
-      actions={settings.canEdit && (
-        <>
-          <button type="button" className="btn btn-outline-primary btn-pill px-3" onClick={() => setList((l) => [...l, { id: `new-${uuid()}`, title: '', text: '', autoAdd: false }])}>
-            <i className="bi bi-plus-lg me-1" />Şablon ekle
-          </button>
-          <SaveButton onSave={save} canEdit />
-        </>
-      )}>
-      <ErrorAlert error={error} />
-      {list.length === 0 ? <Card><Empty icon="sticky">Henüz not şablonu yok.</Empty></Card> : (
-        <fieldset disabled={!settings.canEdit} className="d-flex flex-column gap-3">
-          {list.map((n) => (
-            <Card key={n.id}>
-              <div className="row g-2 align-items-center">
-                <div className="col-md-5"><input className="form-control" placeholder="Başlık" maxLength={60} aria-label="Şablon başlığı" value={n.title} onChange={(e) => update(n.id, { title: e.target.value })} /></div>
-                <div className="col-md-5">
-                  <div className="form-check form-switch mb-0">
-                    <input className="form-check-input" type="checkbox" role="switch" id={`auto-${n.id}`} checked={n.autoAdd} onChange={(e) => update(n.id, { autoAdd: e.target.checked })} />
-                    <label className="form-check-label" htmlFor={`auto-${n.id}`}>Her faturaya otomatik ekle</label>
-                  </div>
-                </div>
-                <div className="col-md-2 text-end">
-                  <button type="button" className="btn btn-sm btn-outline-danger" aria-label="Şablonu sil" onClick={() => setList((l) => l.filter((x) => x.id !== n.id))}><i className="bi bi-trash" /></button>
-                </div>
-                <div className="col-12">
-                  <textarea className="form-control" rows={2} maxLength={500} placeholder="Not metni" aria-label="Not metni" value={n.text} onChange={(e) => update(n.id, { text: e.target.value })} />
-                  <div className="form-text text-end">{n.text.length}/500</div>
-                </div>
+    <SettingsLayout icon="sticky" title="Not şablonları" subtitle="Faturalara eklenecek otomatik ve seçilebilir notlar"
+      actions={<SaveButton onSave={save} canEdit={settings.canEdit && Boolean(list)} />}>
+      <ErrorAlert error={error || settings.error} />
+      {!settings.error && !list && <Spinner />}
+      {list && <div className="row g-3 align-items-start">
+        <div className="col-lg-5">
+          <Card title="Tanımlı şablonlar" actions={settings.canEdit && (
+            <button type="button" className="btn btn-primary" onClick={add}><i className="bi bi-plus-lg" aria-hidden="true" />Not ekle</button>
+          )}>
+            {list.length ? <ul className="list-unstyled d-grid gap-2 mb-0">
+              {list.map((note) => <li key={note.id} className="d-flex flex-wrap align-items-center gap-2 rounded border p-2">
+                <button type="button" className="btn btn-sm btn-outline-secondary flex-grow-1 justify-content-start text-break"
+                  aria-pressed={selected?.id === note.id} onClick={() => setSelectedId(note.id)}>{note.title || 'Adsız şablon'}</button>
+                <span className={`badge text-bg-${note.autoAdd ? 'success' : 'secondary'}`}>{note.autoAdd ? 'Otomatik' : 'İsteğe bağlı'}</span>
+                {settings.canEdit && <button type="button" className="btn btn-sm btn-outline-danger" aria-label={`${note.title || 'Adsız şablon'} sil`}
+                  onClick={() => setList((items) => items.filter((item) => item.id !== note.id))}><i className="bi bi-trash" /></button>}
+              </li>)}
+            </ul> : <Empty icon="sticky">Henüz not şablonu yok.</Empty>}
+          </Card>
+        </div>
+        {selected && <div className="col-lg-7">
+          <Card title="Şablon düzenleyici">
+            <fieldset key={selected.id} disabled={!settings.canEdit} className="d-grid gap-3">
+              <div>
+                <label className="form-label" htmlFor="note-title">Şablon başlığı</label>
+                <input className="form-control" id="note-title" maxLength={60} value={selected.title} onChange={(e) => update(selected.id, { title: e.target.value })} />
               </div>
-            </Card>
-          ))}
-        </fieldset>
-      )}
+              <div>
+                <label className="form-label" htmlFor="note-text">Not metni</label>
+                <textarea className="form-control" id="note-text" rows={4} maxLength={500} value={selected.text} onChange={(e) => update(selected.id, { text: e.target.value })} />
+                <div className="form-text text-end">{selected.text.length}/500</div>
+              </div>
+              <div className="form-check form-switch">
+                <input className="form-check-input" type="checkbox" role="switch" id="note-auto" checked={selected.autoAdd} onChange={(e) => update(selected.id, { autoAdd: e.target.checked })} />
+                <label className="form-check-label" htmlFor="note-auto">Her faturaya otomatik ekle</label>
+              </div>
+            </fieldset>
+            {selected.text && <div className="mt-4">
+              <div className="form-label">Not önizlemesi</div>
+              <div className="rounded border p-3 text-break" style={{ whiteSpace: 'pre-wrap' }}>{selected.text}</div>
+            </div>}
+          </Card>
+        </div>}
+      </div>}
     </SettingsLayout>
   );
 }
@@ -151,6 +179,7 @@ function ibanValid(iban) {
 }
 
 const formatIban = (iban) => iban.replace(/(.{4})/g, '$1 ').trim();
+const maskIban = (iban) => iban.length > 6 ? `${iban.slice(0, 2)} •••• ${iban.slice(-4)}` : '—';
 
 function BanksPage() {
   const session = useSession();
@@ -158,7 +187,6 @@ function BanksPage() {
   const settings = useTenantSettings();
   const [list, setList] = useEditable(settings.data?.bankAccounts);
   const [error, setError] = useState(null);
-  if (settings.loading || !list) return <Spinner />;
   const update = (id, patch) => setList((l) => l.map((b) => (b.id === id ? { ...b, ...patch } : b)));
 
   const save = async () => {
@@ -179,7 +207,7 @@ function BanksPage() {
 
   return (
     <SettingsLayout icon="bank2" title="Banka hesapları" subtitle={updatedText(settings.data)}
-      actions={settings.canEdit && (
+      actions={settings.canEdit && list && (
         <>
           <button type="button" className="btn btn-outline-primary btn-pill px-3"
             onClick={() => setList((l) => [...l, { id: `new-${uuid()}`, bankName: '', branch: '', iban: 'TR', accountHolder: session.tenant?.profile?.title || '', currency: 'TRY', addToNotes: true }])}>
@@ -188,13 +216,32 @@ function BanksPage() {
           <SaveButton onSave={save} canEdit />
         </>
       )}>
-      <ErrorAlert error={error} />
-      {list.length === 0 ? <Card><Empty icon="bank2">Henüz banka hesabı yok.</Empty></Card> : (
+      <ErrorAlert error={error || settings.error} />
+      {!settings.error && !list && <Spinner />}
+      {list?.length === 0 && <Card><Empty icon="bank2">Henüz banka hesabı yok.</Empty></Card>}
+      {Boolean(list?.length) && (
+        <Card title="Tanımlı hesaplar" className="mb-4">
+          <div className="table-responsive">
+            <table className="table align-middle mb-0">
+              <thead><tr><th scope="col">Banka</th><th scope="col">Hesap sahibi</th><th scope="col">IBAN</th><th scope="col">Para birimi</th></tr></thead>
+              <tbody>{list.map((account) => (
+                <tr key={account.id}>
+                  <th scope="row">{account.bankName || 'Yeni hesap'}</th>
+                  <td>{account.accountHolder || '—'}</td>
+                  <td className="text-nowrap font-monospace">{maskIban(account.iban)}</td>
+                  <td>{account.currency}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+      {Boolean(list?.length) && (
         <fieldset disabled={!settings.canEdit} className="d-flex flex-column gap-3">
           {list.map((b) => {
             const valid = ibanValid(b.iban);
             return (
-              <Card key={b.id}>
+              <Card key={b.id} title={b.bankName || 'Banka hesabı'}>
                 <div className="row g-3">
                   <div className="col-md-4"><label className="form-label small" htmlFor={`bn-${b.id}`}>Banka</label><input className="form-control" id={`bn-${b.id}`} maxLength={100} value={b.bankName} onChange={(e) => update(b.id, { bankName: e.target.value })} /></div>
                   <div className="col-md-3"><label className="form-label small" htmlFor={`br-${b.id}`}>Şube</label><input className="form-control" id={`br-${b.id}`} maxLength={100} value={b.branch || ''} onChange={(e) => update(b.id, { branch: e.target.value })} /></div>
@@ -232,7 +279,7 @@ const KINDS = { EFatura: 'e-Fatura', EArsiv: 'e-Arşiv', Draft: 'Taslak' };
 
 function NumberingPage() {
   const session = useSession();
-  const { data, loading } = useLoad(() => api.get('/api/v1/tenants/current/sequences'), [session.tenant?.id]);
+  const { data, loading, error, reload } = useLoad(() => api.get('/api/v1/tenants/current/sequences'), [session.tenant?.id]);
   const t = session.tenant;
   const series = [
     ['e-Fatura', t.eFaturaPrefix],
@@ -241,45 +288,47 @@ function NumberingPage() {
   ];
   const year = new Date().getFullYear();
   return (
-    <SettingsLayout title="Numaralandırma">
-      <div className="row g-3 mb-4">
-        {series.map(([label, prefix]) => (
-          <div className="col-md-4" key={label}>
-            <div className="card shadow-sm h-100">
-              <div className="card-body">
-                <div className="small text-body-secondary">{label}</div>
-                <div className="fs-4 fw-bold font-monospace">{prefix}<span className="text-body-tertiary">{year}000000001</span></div>
-              </div>
+    <SettingsLayout title="Numaralandırma" subtitle="Belge serileri, son atanan numaralar ve sıradaki sayaçlar"
+      actions={session.can('CompanyManage') && <Link className="btn btn-outline-primary" to="/settings/company">Serileri düzenle</Link>}>
+      <Card title="Seri numarası yapılandırması" className="mb-4">
+        <dl className="row g-3 mb-0">
+          {series.map(([label, prefix]) => (
+            <div className="col-md-4" key={label}>
+              <dt className="form-label">{label}</dt>
+              <dd className="rounded border p-2 font-monospace mb-0">{prefix || '—'}</dd>
             </div>
-          </div>
-        ))}
-      </div>
-      <Card title="Sayaçlar" icon="list-ol" bodyClass="">
-        {loading ? <div className="px-3"><Spinner /></div> : data?.length ? (
-          <div className="table-responsive">
-            <table className="table align-middle mb-0">
-              <thead><tr><th>Tür</th><th>Seri</th><th>Yıl</th><th className="num">Son numara</th><th>Sonraki belge</th><th>Güncelleme</th></tr></thead>
-              <tbody>
-                {data.map((s) => (
-                  <tr key={`${s.documentKind}-${s.prefix}-${s.fiscalYear}`}>
-                    <td>{KINDS[s.documentKind] || s.documentKind}</td>
-                    <td className="font-monospace">{s.prefix}</td>
-                    <td>{s.fiscalYear}</td>
-                    <td className="num">{s.lastValue}</td>
-                    <td className="font-monospace">{`${s.prefix}${s.fiscalYear}${String(s.lastValue + 1).padStart(9, '0')}`}</td>
-                    <td className="small text-body-secondary">{fmtDate(s.updatedAt)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : <Empty icon="list-ol">Henüz numara verilmedi.</Empty>}
-      </Card>
-    </SettingsLayout>
-  );
-}
+          ))}
+        </dl>
+        <p className="form-text mt-3 mb-0">Sayaçlar belge türü ve yıl bazında izlenir. Geçerli yıl {year}.</p>
+        </Card>
+        <Card title="Sayaçlar" icon="list-ol" bodyClass="">
+          {loading ? <div className="px-3"><Spinner /></div> : error ? (
+            <div className="card-body"><ErrorAlert error={error} /><BusyButton className="btn btn-outline-primary" onClick={reload}>Yenile</BusyButton></div>
+          ) : data?.length ? (
+            <div className="table-responsive">
+              <table className="table align-middle mb-0">
+                <thead><tr><th>Tür</th><th>Seri</th><th>Yıl</th><th className="num">Son numara</th><th>Sonraki belge</th><th>Güncelleme</th></tr></thead>
+                <tbody>
+                  {data.map((s) => (
+                    <tr key={`${s.documentKind}-${s.prefix}-${s.fiscalYear}`}>
+                      <td>{KINDS[s.documentKind] || s.documentKind}</td>
+                      <td className="font-monospace">{s.prefix}</td>
+                      <td>{s.fiscalYear}</td>
+                      <td className="num">{s.lastValue}</td>
+                      <td className="font-monospace">{`${s.prefix}${s.fiscalYear}${String(s.lastValue + 1).padStart(9, '0')}`}</td>
+                      <td className="small text-body-secondary">{fmtDate(s.updatedAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : <Empty icon="list-ol">Henüz numara verilmedi.</Empty>}
+        </Card>
+      </SettingsLayout>
+    );
+  }
 
-export const InvoiceDefaultsSettings = () => <TenantRequired><DefaultsPage /></TenantRequired>;
-export const NoteTemplateSettings = () => <TenantRequired><NotesPage /></TenantRequired>;
-export const BankAccountSettings = () => <TenantRequired><BanksPage /></TenantRequired>;
-export const NumberingSettings = () => <TenantRequired><NumberingPage /></TenantRequired>;
+  export const InvoiceDefaultsSettings = () => <TenantRequired><DefaultsPage /></TenantRequired>;
+  export const NoteTemplateSettings = () => <TenantRequired><NotesPage /></TenantRequired>;
+  export const BankAccountSettings = () => <TenantRequired><BanksPage /></TenantRequired>;
+  export const NumberingSettings = () => <TenantRequired><NumberingPage /></TenantRequired>;

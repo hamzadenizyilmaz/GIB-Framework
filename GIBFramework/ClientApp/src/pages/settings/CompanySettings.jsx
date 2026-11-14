@@ -76,6 +76,7 @@ function CompanyForm() {
       name: t.name || '', title: p.title || '', regime: p.regime || 'Bilanco', taxOffice: p.taxOffice || '', neighborhood: p.neighborhood || '',
       street: p.street || '', buildingNumber: p.buildingNumber || '', district: p.district || '', city: p.city || '', postalCode: p.postalCode || '',
       email: p.email || '', phone: p.phone || '', isEFaturaRegistered: !!p.isEFaturaRegistered, isEArchiveRegistered: !!p.isEArchiveRegistered,
+      fax: p.fax || '', website: p.website || '', tradeRegistryNumber: p.tradeRegistryNumber || '', mersisNumber: p.mersisNumber || '',
       eFaturaPrefix: t.eFaturaPrefix || 'EFT', eArsivPrefix: t.eArsivPrefix || 'EAR',
     });
   }, [t]);
@@ -122,6 +123,10 @@ function CompanyForm() {
               <div className="col-md-6"><label className="form-label" htmlFor="c-vd">Vergi dairesi</label><input className="form-control" id="c-vd" required maxLength={100} value={form.taxOffice} onChange={set('taxOffice')} /></div>
               <div className="col-md-3"><label className="form-label" htmlFor="c-mail">E-posta</label><input className="form-control" id="c-mail" type="email" maxLength={200} value={form.email} onChange={set('email')} /></div>
               <div className="col-md-3"><label className="form-label" htmlFor="c-tel">Telefon</label><input className="form-control" id="c-tel" type="tel" maxLength={30} value={form.phone} onChange={set('phone')} /></div>
+              <div className="col-md-3"><label className="form-label" htmlFor="c-fax">Faks</label><input className="form-control" id="c-fax" type="tel" maxLength={30} value={form.fax} onChange={set('fax')} /></div>
+              <div className="col-md-3"><label className="form-label" htmlFor="c-web">Web sitesi</label><input className="form-control" id="c-web" type="url" maxLength={200} value={form.website} onChange={set('website')} /></div>
+              <div className="col-md-3"><label className="form-label" htmlFor="c-trade">Ticaret sicil no</label><input className="form-control" id="c-trade" maxLength={30} value={form.tradeRegistryNumber} onChange={set('tradeRegistryNumber')} /></div>
+              <div className="col-md-3"><label className="form-label" htmlFor="c-mersis">MERSİS no</label><input className="form-control" id="c-mersis" inputMode="numeric" pattern="[0-9]{16}" maxLength={16} value={form.mersisNumber} onChange={set('mersisNumber')} /></div>
             </div>
           </Card>
           <Card title="Adres" icon="geo-alt">
@@ -133,22 +138,22 @@ function CompanyForm() {
               <div className="col-md-3"><label className="form-label" htmlFor="c-pk">Posta kodu</label><input className="form-control" id="c-pk" inputMode="numeric" maxLength={5} value={form.postalCode} onChange={(e) => setForm((f) => ({ ...f, postalCode: e.target.value.replace(/\D/g, '').slice(0, 5) }))} /></div>
             </div>
           </Card>
-          <Card title="e-Belge" icon="file-earmark-check">
+          <Card title="e-Belge kayıtları" icon="file-earmark-check">
             <div className="row g-3 align-items-end">
-              <div className="col-md-3">
+              <div className="col-sm-6">
                 <div className="form-check form-switch">
                   <input className="form-check-input" type="checkbox" role="switch" id="c-ef" checked={form.isEFaturaRegistered} onChange={set('isEFaturaRegistered')} />
                   <label className="form-check-label" htmlFor="c-ef">e-Fatura kullanıcısı</label>
                 </div>
               </div>
-              <div className="col-md-3">
+              <div className="col-sm-6">
                 <div className="form-check form-switch">
                   <input className="form-check-input" type="checkbox" role="switch" id="c-ea" checked={form.isEArchiveRegistered} onChange={set('isEArchiveRegistered')} />
                   <label className="form-check-label" htmlFor="c-ea">e-Arşiv kullanıcısı</label>
                 </div>
               </div>
-              <div className="col-md-3"><label className="form-label" htmlFor="c-pef">e-Fatura serisi</label><input className="form-control font-monospace" id="c-pef" required pattern="[A-Z0-9]{3}" value={form.eFaturaPrefix} onChange={prefix('eFaturaPrefix')} /></div>
-              <div className="col-md-3"><label className="form-label" htmlFor="c-pea">e-Arşiv serisi</label><input className="form-control font-monospace" id="c-pea" required pattern="[A-Z0-9]{3}" value={form.eArsivPrefix} onChange={prefix('eArsivPrefix')} /></div>
+              <div className="col-sm-6"><label className="form-label" htmlFor="c-pef">e-Fatura serisi</label><input className="form-control font-monospace" id="c-pef" required pattern="[A-Z0-9]{3}" value={form.eFaturaPrefix} onChange={prefix('eFaturaPrefix')} /></div>
+              <div className="col-sm-6"><label className="form-label" htmlFor="c-pea">e-Arşiv serisi</label><input className="form-control font-monospace" id="c-pea" required pattern="[A-Z0-9]{3}" value={form.eArsivPrefix} onChange={prefix('eArsivPrefix')} /></div>
             </div>
           </Card>
         </fieldset>

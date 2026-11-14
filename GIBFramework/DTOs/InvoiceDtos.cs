@@ -56,6 +56,9 @@ public sealed record PartyDto
 
 public sealed record InvoiceLineDto
 {
+    [StringLength(100)]
+    public string? ProductCode { get; init; }
+
     [Required, StringLength(250)]
     public string Name { get; init; } = string.Empty;
 

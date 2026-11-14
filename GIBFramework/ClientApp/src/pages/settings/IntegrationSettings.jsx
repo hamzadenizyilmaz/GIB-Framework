@@ -39,9 +39,10 @@ function saveFile(name, text) {
 function IntegrationsHome() {
   const dialogs = useDialogs();
   const navigate = useNavigate();
-  const { data: catalog, loading: lc } = useCatalog();
-  const { data: list, loading: ll } = useLoad(() => api.get('/api/v1/integrations'), []);
+  const { data: catalog, loading: lc, error: catalogError } = useCatalog();
+  const { data: list, loading: ll, error: listError } = useLoad(() => api.get('/api/v1/integrations'), []);
   if (lc || ll) return <Spinner />;
+  if (catalogError || listError) return <ErrorAlert error={catalogError || listError} />;
   const info = Object.fromEntries(catalog.kinds.map((k) => [k.kind, k]));
 
   const add = async (kind) => {
@@ -231,8 +232,8 @@ function Deliveries({ id, refreshKey }) {
                   <td className="small">{d.httpStatus || '—'}</td>
                   <td className="small text-truncate" style={{ maxWidth: '16rem' }}>{d.error || d.externalId || ''}</td>
                   <td className="text-end" onClick={(e) => e.stopPropagation()}>
-                    {d.status === 'Failed' && d.direction === 'Out' && (
-                      <BusyButton className="btn btn-sm btn-outline-primary" onClick={async () => { await api.post(`/api/v1/integrations/${id}/deliveries/${d.id}/retry`); toast('Yeniden denenecek.'); await reload(); }}>
+                    {((d.status === 'Failed' && d.direction === 'Out') || (d.eventType === 'marketplace.import' && ['Failed', 'Pending'].includes(d.status))) && (
+                      <BusyButton className="btn btn-sm btn-outline-primary" title="Yeniden işle" aria-label="Yeniden işle" onClick={async () => { await api.post(`/api/v1/integrations/${id}/deliveries/${d.id}/retry`); await reload(); toast('Kayıt güncellendi.'); }}>
                         <i className="bi bi-arrow-repeat" />
                       </BusyButton>
                     )}
@@ -248,10 +249,14 @@ function Deliveries({ id, refreshKey }) {
         <Modal title="Kayıt ayrıntısı" size="lg" scrollable onClose={() => setOpen(null)}>
           <div className="modal-body">
             {open.error && <div className="alert alert-danger small">{open.error}</div>}
-            <div className="small fw-semibold mb-1">İstek</div>
-            <pre className="code-block code-scroll mb-3">{pretty(open.requestBody)}</pre>
-            <div className="small fw-semibold mb-1">Yanıt</div>
-            <pre className="code-block code-scroll mb-0">{pretty(open.responseBody)}</pre>
+            <dl className="mb-0">
+              <dt>Olay</dt><dd>{open.eventType}</dd>
+              <dt>Durum</dt><dd>{DELIVERY[open.status][0]}</dd>
+              <dt>HTTP</dt><dd>{open.httpStatus || '—'}</dd>
+              <dt>Deneme sayısı</dt><dd>{open.attempts}</dd>
+              {open.nextAttemptAt && <><dt>Sonraki deneme</dt><dd>{fmtDate(open.nextAttemptAt)}</dd></>}
+              {open.externalId && <><dt>Harici kayıt kimliği</dt><dd>{open.externalId}</dd></>}
+            </dl>
           </div>
         </Modal>
       )}
@@ -259,21 +264,12 @@ function Deliveries({ id, refreshKey }) {
   );
 }
 
-function pretty(text) {
-  if (!text) return '—';
-  try {
-    return JSON.stringify(JSON.parse(text), null, 2);
-  } catch {
-    return text;
-  }
-}
-
 function IntegrationEditor() {
   const { id } = useParams();
   const navigate = useNavigate();
   const toast = useToast();
   const dialogs = useDialogs();
-  const { data: catalog } = useCatalog();
+  const { data: catalog, error: catalogError } = useCatalog();
   const { data: item, loading, error, reload } = useLoad(() => api.get(`/api/v1/integrations/${id}`), [id]);
   const [form, setForm] = useState(null);
   const [saveError, setSaveError] = useState(null);
@@ -283,9 +279,10 @@ function IntegrationEditor() {
     if (item) setForm({ name: item.name, isActive: item.isActive, settings: { ...item.settings }, secrets: {}, events: [...item.events] });
   }, [item]);
 
-  if (error) return <ErrorAlert error={error} />;
+  if (error || catalogError) return <ErrorAlert error={error || catalogError} />;
   if (loading || !catalog || !form) return <Spinner />;
   const info = catalog.kinds.find((k) => k.kind === item.kind);
+  if (!info) return <ErrorAlert error={{ message: 'Bu entegrasyon türünün ayarları alınamadı.' }} />;
   const setSetting = (k, v) => setForm((f) => ({ ...f, settings: { ...f.settings, [k]: v } }));
   const setSecret = (k, v) => setForm((f) => ({ ...f, secrets: { ...f.secrets, [k]: v } }));
 
@@ -305,7 +302,7 @@ function IntegrationEditor() {
     <>
       <div className="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
         <Link to="/settings/integrations" className="btn btn-sm btn-outline-secondary btn-pill"><i className="bi bi-arrow-left me-1" />Entegrasyonlar</Link>
-        <div className="d-flex gap-2">
+        <div className="d-flex flex-wrap gap-2">
           <BusyButton className="btn btn-sm btn-outline-primary btn-pill" disabled={!form.settings.webhookUrl} onClick={async () => {
             const d = await api.post(`/api/v1/integrations/${id}/test`);
             toast(d.status === 'Succeeded' ? `Deneme başarılı (HTTP ${d.httpStatus}).` : `Deneme başarısız: ${d.error || d.httpStatus}`, d.status === 'Succeeded' ? 'success' : 'danger');
@@ -316,7 +313,7 @@ function IntegrationEditor() {
             await api.del(`/api/v1/integrations/${id}`);
             toast('Entegrasyon silindi.', 'warning');
             navigate('/settings/integrations');
-          }}><i className="bi bi-trash me-1" />Sil</BusyButton>
+          }}><i className="bi bi-trash me-1" aria-hidden="true" />Sil</BusyButton>
         </div>
       </div>
       <div className="row g-4">

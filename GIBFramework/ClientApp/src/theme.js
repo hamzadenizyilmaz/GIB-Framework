@@ -1,6 +1,7 @@
 const KEY = 'gibframework.appearance';
 
 export const ACCENTS = {
+  forest: { label: 'Orman yeşili', color: '#1c3934', dark: '#132b27', rgb: '28, 57, 52', light: '#8bd1bf' },
   blue: { label: 'Mavi', color: '#0778e6', dark: '#0667c7', rgb: '7, 120, 230' },
   indigo: { label: 'Lacivert', color: '#3f51d6', dark: '#3242b8', rgb: '63, 81, 214' },
   teal: { label: 'Turkuaz', color: '#0f9488', dark: '#0b7a70', rgb: '15, 148, 136' },
@@ -9,7 +10,7 @@ export const ACCENTS = {
   orange: { label: 'Turuncu', color: '#e8590c', dark: '#c94c0a', rgb: '232, 89, 12' },
 };
 
-export const DEFAULT_APPEARANCE = { theme: 'auto', accent: 'blue', density: 'comfortable', width: 'wide' };
+export const DEFAULT_APPEARANCE = { theme: 'auto', accent: 'forest', density: 'comfortable', width: 'wide' };
 
 export function readAppearance() {
   try {
@@ -28,15 +29,18 @@ export function resolvedTheme(theme) {
 
 export function applyAppearance(value = readAppearance()) {
   const root = document.documentElement;
-  root.setAttribute('data-bs-theme', resolvedTheme(value.theme));
-  const accent = ACCENTS[value.accent] || ACCENTS.blue;
+  const theme = resolvedTheme(value.theme);
+  root.setAttribute('data-bs-theme', theme);
+  const accent = ACCENTS[value.accent] || ACCENTS.forest;
   root.style.setProperty('--app-blue', accent.color);
   root.style.setProperty('--app-blue-600', accent.dark);
   root.style.setProperty('--bs-primary', accent.color);
   root.style.setProperty('--bs-primary-rgb', accent.rgb);
-  root.style.setProperty('--bs-link-color', accent.color);
-  root.style.setProperty('--bs-link-color-rgb', accent.rgb);
-  root.style.setProperty('--bs-link-hover-color', accent.dark);
+  const link = theme === 'dark' ? accent.light || '#a8d8cf' : accent.color;
+  const linkRgb = link.match(/[a-f\d]{2}/gi).map((channel) => Number.parseInt(channel, 16)).join(', ');
+  root.style.setProperty('--bs-link-color', link);
+  root.style.setProperty('--bs-link-color-rgb', linkRgb);
+  root.style.setProperty('--bs-link-hover-color', theme === 'dark' ? '#d7efe9' : accent.dark);
   root.classList.toggle('density-compact', value.density === 'compact');
   root.classList.toggle('layout-boxed', value.width === 'boxed');
 }

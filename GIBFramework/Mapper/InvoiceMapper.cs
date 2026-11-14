@@ -18,6 +18,7 @@ public static class InvoiceMapper
             Customer = request.Customer.ToParty(),
             Lines = [.. request.Lines.Select(l => new InvoiceLine
             {
+                ProductCode = string.IsNullOrWhiteSpace(l.ProductCode) ? null : l.ProductCode.Trim(),
                 Name = l.Name,
                 Description = l.Description,
                 Quantity = l.Quantity,

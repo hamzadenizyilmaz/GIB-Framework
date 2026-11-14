@@ -4,7 +4,7 @@ using GIBFramework.Infrastructure.Tenancy;
 
 namespace GIBFramework.Middleware;
 
-public sealed class TenantContextMiddleware(RequestDelegate next)
+public sealed class TenantContextMiddleware(RequestDelegate next, IpAccessPolicy ipAccess)
 {
     public async Task InvokeAsync(HttpContext context, RequestTenantContext tenant, ITenantRepository tenants)
     {
@@ -14,7 +14,14 @@ public sealed class TenantContextMiddleware(RequestDelegate next)
         if (context.User.Identity?.IsAuthenticated == true)
         {
             var tenantId = context.User.GetTenantId();
+            if (tenantId is { } ownTenant && !ipAccess.Allows(context.Connection.RemoteIpAddress, ownTenant))
+            {
+                context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                await context.Response.WriteAsJsonAsync(new { code = "TENANT_IP_ACCESS_DENIED", title = "Bu IP adresinden firmanızın paneline erişilemez." });
+                return;
+            }
             if (context.User.IsInRole(Roles.PlatformSuperAdmin)
+                && !context.Request.Path.StartsWithSegments("/api/v1/settings/ip-access", StringComparison.OrdinalIgnoreCase)
                 && context.Request.Headers.TryGetValue(GibFrameworkHeaders.TenantId, out var value))
             {
                 if (!Guid.TryParse(value.ToString(), out var overrideId) || overrideId == Guid.Empty)

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Microsoft.Data.SqlClient;
 using GIBFramework.Services.Auth;
+using GIBFramework.Services.Compliance;
 using GIBFramework.Services.Ubl;
 
 namespace GIBFramework.DAL;
@@ -16,6 +17,8 @@ public sealed class ReadinessCheck(
     SigningOptions signing,
     ProviderOptions providers,
     GibPortalOptions portal,
+    ComplianceEngine compliance,
+    IClock clock,
     UblValidator ubl)
 {
     public async Task<ReadinessResult> CheckAsync(CancellationToken ct)
@@ -62,6 +65,13 @@ public sealed class ReadinessCheck(
             || signing.TrustedRootSha256.Any(hash => hash.Length != 64 || !hash.All(Uri.IsHexDigit)))
         {
             return Result("Üretim portalı ve güvenilen kök sertifikaların SHA-256 özetleri yapılandırılmalıdır.");
+        }
+
+        var routing = compliance.RuleSet.EffectiveOn(clock.TurkeyToday).Where(rule => rule.IsApproved)
+            .Select(rule => rule.Kind).ToHashSet(StringComparer.Ordinal);
+        if (!routing.Contains("EFaturaRouting") || !routing.Contains("EArchiveRouting"))
+        {
+            return Result("Bugün için onaylı e-Fatura ve e-Arşiv yönlendirme kuralları gereklidir.");
         }
 
         try

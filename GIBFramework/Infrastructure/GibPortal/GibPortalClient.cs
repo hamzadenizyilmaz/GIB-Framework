@@ -27,6 +27,10 @@ public sealed record GibPortalDocumentRow(
     JsonElement Raw)
 {
     public bool IsApproved => ApprovalStatus == GibPortalProtocol.Approved;
+
+    public bool IsDated(DateOnly expected) => string.IsNullOrWhiteSpace(DocumentDate)
+        || (DateOnly.TryParseExact(DocumentDate.Trim(), ["d/M/yyyy", "d.M.yyyy", "yyyy-MM-dd"],
+            CultureInfo.InvariantCulture, DateTimeStyles.None, out var date) && date == expected);
 }
 
 public sealed class GibPortalClient(IHttpClientFactory httpFactory, GibPortalOptions options)
@@ -127,14 +131,19 @@ public sealed class GibPortalClient(IHttpClientFactory httpFactory, GibPortalOpt
             NonEmpty(Str(d, "vergiDairesi"), Str(d, "vergiDairesiAdi")));
     }
 
-    public async Task CreateDraftAsync(GibPortalEnvironment env, string token, IReadOnlyDictionary<string, object?> draft, CancellationToken ct)
+    public async Task<Guid?> CreateDraftAsync(GibPortalEnvironment env, string token, IReadOnlyDictionary<string, object?> draft, CancellationToken ct)
     {
         var d = await DispatchAsync(env, token, GibPortalProtocol.CreateDraft, GibPortalProtocol.PageInvoice, draft, ct);
         var text = d.ValueKind == JsonValueKind.String ? d.GetString() ?? string.Empty : d.ToString();
+        if (Guid.TryParse(NonEmpty(Str(d, "ettn"), Str(d, "faturaUuid")), out var ettn) && ettn != Guid.Empty)
+        {
+            return ettn;
+        }
         if (!text.Contains(GibPortalProtocol.CreateSuccessFragment, StringComparison.OrdinalIgnoreCase))
         {
             throw new GibPortalException("GİB portalı taslağı oluşturmadı: " + text, IsExpired(text));
         }
+        return null;
     }
 
     public async Task<IReadOnlyList<GibPortalDocumentRow>> ListDraftsAsync(GibPortalEnvironment env, string token, DateOnly from, DateOnly to, CancellationToken ct)
@@ -150,9 +159,10 @@ public sealed class GibPortalClient(IHttpClientFactory httpFactory, GibPortalOpt
         return d.ValueKind != JsonValueKind.Array
             ? []
             : [.. d.EnumerateArray()
-                .Where(r => Str(r, "ettn") is not null)
-                .Select(r => new GibPortalDocumentRow(Str(r, "ettn")!, Str(r, "belgeNumarasi"), Str(r, "aliciVknTckn"), Str(r, "aliciUnvanAdSoyad"),
-                    Str(r, "belgeTarihi"), Str(r, "onayDurumu"), r.Clone()))];
+                .Select(r => new GibPortalDocumentRow(NonEmpty(Str(r, "ettn"), Str(r, "faturaUuid")) ?? string.Empty,
+                    Str(r, "belgeNumarasi"), NonEmpty(Str(r, "aliciVknTckn"), Str(r, "vknTckn")), Str(r, "aliciUnvanAdSoyad"),
+                    NonEmpty(Str(r, "belgeTarihi"), Str(r, "faturaTarihi")), Str(r, "onayDurumu")?.Trim(), r.Clone()))
+                .Where(r => Guid.TryParse(r.Ettn, out _))];
     }
 
     public async Task<IReadOnlyList<JsonElement>> ListIssuedToMeAsync(GibPortalEnvironment env, string token, DateOnly from, DateOnly to, CancellationToken ct)
@@ -240,8 +250,23 @@ public sealed class GibPortalClient(IHttpClientFactory httpFactory, GibPortalOpt
         var client = Create(env);
         var url = $"{GibPortalProtocol.DownloadPath}?token={Uri.EscapeDataString(token)}&ettn={Uri.EscapeDataString(ettn)}&belgeTip=FATURA"
             + $"&onayDurumu={Uri.EscapeDataString(GibPortalProtocol.Approved)}&cmd={GibPortalProtocol.DownloadCommand}";
-        using var response = await client.GetAsync(url, ct);
-        var bytes = await response.Content.ReadAsByteArrayAsync(ct);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(TimeSpan.FromSeconds(45));
+        using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
+        const int maxBytes = 32 * 1024 * 1024;
+        if (response.Content.Headers.ContentLength > maxBytes)
+            throw new GibPortalException("GİB belge arşivi boyut sınırını aştı.", false);
+        await using var stream = await response.Content.ReadAsStreamAsync(deadline.Token);
+        using var buffer = new MemoryStream();
+        var chunk = new byte[81920];
+        int read;
+        while ((read = await stream.ReadAsync(chunk, deadline.Token)) > 0)
+        {
+            if (buffer.Length + read > maxBytes)
+                throw new GibPortalException("GİB belge arşivi boyut sınırını aştı.", false);
+            buffer.Write(chunk, 0, read);
+        }
+        var bytes = buffer.ToArray();
         if (!response.IsSuccessStatusCode || bytes.Length < 4 || bytes[0] != 'P' || bytes[1] != 'K')
         {
             var text = Encoding.UTF8.GetString(bytes);

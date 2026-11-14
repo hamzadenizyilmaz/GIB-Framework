@@ -4,8 +4,8 @@
 
 | Sürüm | Güvenlik güncellemesi |
 |---|---|
-| 5.5.1 | Güncel güvenlik düzeltmeleri |
-| 5.2.x ve öncesi | 5.5.1'e yükseltin |
+| 6.0.0 | Güncel güvenlik düzeltmeleri |
+| 5.x ve öncesi | 6.0.0'a yükseltin |
 
 ## Açık bildirimi
 

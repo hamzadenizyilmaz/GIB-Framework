@@ -120,10 +120,10 @@ export function Customers() {
     <>
       <PageHeader icon="person-vcard" title="Cari kartlar" subtitle={rows ? `${rows.length} kayıt · ${rows.filter((c) => c.isEFaturaRegistered).length} e-Fatura mükellefi` : null}
         actions={canEdit && <button className="btn btn-primary" type="button" onClick={() => setEditing({})}><i className="bi bi-plus-lg me-1" />Yeni cari</button>} />
-      <Card className="mb-4">
+      <Card title="Cari arama" className="mb-4">
         <input className="form-control" placeholder="Unvan, VKN/TCKN veya e-posta ile ara" aria-label="Ara" value={q} onChange={(e) => setQ(e.target.value)} />
       </Card>
-      <Card bodyClass="">
+      <Card title="Cari kayıtları" bodyClass="invoice-table-body">
         {loading ? <div className="px-3"><Spinner /></div> : filtered.length ? (
           <div className="table-responsive">
             <table className="table table-hover align-middle mb-0">

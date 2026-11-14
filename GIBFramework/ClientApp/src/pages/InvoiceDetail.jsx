@@ -158,8 +158,24 @@ export function InvoiceDetail() {
           navigate('/gib-portal');
           return;
         }
-        if (!await dialogs.confirm('GİB portal taslağı', `Fatura GİB e-Arşiv Portal (${status.environment === 'Production' ? 'CANLI' : 'test'}) üzerinde taslak olarak oluşturulacak. ETTN'yi GİB atar.`, 'Taslak oluştur')) return;
-        const r = await api.post(`${portal}/draft`); toast(`GİB taslağı oluşturuldu: ${r.ettn}`);
+        if (!await dialogs.confirm('GİB portal taslağı', `Fatura GİB e-Arşiv Portal (${status.environment === 'Production' ? 'CANLI' : 'test'}) üzerinde taslak olarak hazırlanacak. Daha önce istek gönderildiyse aynı taslak aranır.`, 'Devam et')) return;
+        const checkDraft = () => api.post(`${portal}/draft`);
+        try {
+          const r = await checkDraft();
+          toast(`GİB taslağı hazır: ${r.ettn}`);
+        } catch (error) {
+          if (error.code !== 'GIB_PORTAL_DRAFT_RECONCILIATION') throw error;
+          if (!await dialogs.confirm('GİB taslak durumu', error.message, 'Taslağı tekrar kontrol et')) return;
+          try {
+            const r = await checkDraft();
+            toast(`GİB taslağı hazır: ${r.ettn}`);
+          } catch (retryError) {
+            if (retryError.code !== 'GIB_PORTAL_DRAFT_RECONCILIATION') throw retryError;
+            if (await dialogs.confirm('Taslak henüz doğrulanmadı', retryError.message, 'Portal belgelerini aç')) {
+              navigate('/gib-portal/documents');
+            }
+          }
+        }
         break;
       }
       case 'portal-preview': await showHtml(await api.text(`${portal}/html`)); return;
@@ -257,14 +273,28 @@ export function InvoiceDetail() {
     else toast(`Gönderilemedi: ${r.skipped.join(' ')}`, 'warning');
   };
 
+  const showInvoice = async () => {
+    const content = await api.text(`${base}/preview`);
+    await dialogs.show('Fatura', <iframe className="preview-frame" sandbox="" title="Fatura" srcDoc={content} />, 'xl');
+  };
+
   const share = async () => {
-    const { url } = await api.get(`${base}/share-link`);
+    const external = i.shareable && session.can('InvoiceFullDocument') && session.can('InvoiceRead');
+    const panelUrl = new URL(`#/invoices/${i.id}`, window.location.href).href;
+    const link = external ? await api.get(`${base}/share-link`) : null;
+    const url = link?.pdfUrl || (link?.url ? `${link.url}/fatura.pdf` : panelUrl);
+    try {
+      await navigator.clipboard.writeText(url);
+      toast(external ? 'Müşteriye iletilebilir PDF bağlantısı kopyalandı.' : 'Fatura panel bağlantısı kopyalandı. Açmak için oturum gerekir.');
+      return;
+    } catch {
+      // Selecting the field also works without the clipboard API.
+    }
     await dialogs.show('Fatura bağlantısı', (
       <>
+        <p>{external ? 'Müşteriye iletilebilir PDF bağlantısı.' : 'Panel bağlantısı. Açmak için oturum ve fatura erişim yetkisi gerekir.'}</p>
         <div className="input-group">
-          <input className="form-control font-monospace small" readOnly value={url} aria-label="Bağlantı" onFocus={(e) => e.target.select()} />
-          <button className="btn btn-outline-secondary" type="button" onClick={async () => { try { await navigator.clipboard.writeText(url); toast('Kopyalandı.', 'info'); } catch { toast('Kopyalanamadı.', 'warning'); } }}><i className="bi bi-clipboard" /></button>
-          <a className="btn btn-outline-primary" href={`${url}/fatura.pdf`} target="_blank" rel="noopener noreferrer"><i className="bi bi-filetype-pdf me-1" />PDF</a>
+          <input className="form-control font-monospace small" readOnly value={url} aria-label="Fatura URL’si" onFocus={(e) => e.target.select()} />
           <a className="btn btn-primary" href={url} target="_blank" rel="noopener noreferrer"><i className="bi bi-box-arrow-up-right me-1" />Aç</a>
         </div>
       </>
@@ -281,15 +311,16 @@ export function InvoiceDetail() {
     <>
       <PageHeader
         breadcrumb={[['Faturalar', '/invoices'], [i.documentNumber || i.draftNumber || 'Taslak']]}
-        title={<>{i.documentNumber || i.draftNumber} <StatusBadge status={i.status} /></>}
+        title="Fatura ayrıntısı"
         subtitle={(
           <span className="d-inline-flex flex-wrap gap-2 align-items-center">
-            <DocTypeBadge type={i.documentType} /> <span className="fw-semibold text-body">{i.customer.title}</span>
+            <span>{i.documentNumber || i.draftNumber}</span><DocTypeBadge type={i.documentType} /><span className="fw-semibold text-body">{i.customer.title}</span>
             {isPortal(i) && <span className="badge text-bg-warning"><i className="bi bi-bank me-1" />GİB e-Arşiv Portal</span>}
           </span>
         )}
         actions={(
           <div className="text-end">
+            <StatusBadge status={i.status} />
             <div className="small text-body-secondary">Ödenecek</div>
             <div className="fs-3 fw-bold">{fmtMoney(i.totals.payableAmount, i.currency)}</div>
           </div>
@@ -298,19 +329,31 @@ export function InvoiceDetail() {
 
       {i.lastError && <div className="alert alert-warning"><i className="bi bi-exclamation-triangle me-1" />{i.lastError}</div>}
 
-      <Card className="mb-4">
-        <div className="d-flex flex-wrap gap-2 align-items-center">
+      <Card className="mb-4" title="Belge işlemleri">
+        <div className="invoice-actions">
+          <section aria-label="İş akışı">
+            <h2>İş akışı</h2>
+            <div className="d-flex flex-wrap gap-2 align-items-center">
           {actions.length
             ? actions.map((a) => <BusyButton key={a.id} className={`btn btn-${a.variant}`} onClick={() => run(a.id)}><i className={`bi bi-${a.icon} me-1`} />{a.id === 'portal-sign' && i.portalReconciliationRequired ? 'GİB durumunu doğrula' : a.label}</BusyButton>)
             : <span className="text-body-secondary small">{selfApprovalBlocked && i.status === 'AwaitingApproval' ? 'Kendi oluşturduğunuz faturayı başka bir onaylayıcı onaylamalıdır.' : 'Bu aşamada işlem yok.'}</span>}
-          {signed && <span className="vr mx-1" />}
-          {signed && <BusyButton className="btn btn-outline-secondary" onClick={() => download(`${base}/ubl`, `${i.documentNumber || i.id}.xml`)}><i className="bi bi-filetype-xml me-1" />UBL indir</BusyButton>}
-          {signed && !isPortal(i) && <BusyButton className="btn btn-outline-secondary" onClick={showQr}><i className="bi bi-qr-code me-1" />Karekod</BusyButton>}
+            </div>
+          </section>
+          <section aria-label="Belge ve doğrulama">
+            <h2>Belge ve doğrulama</h2>
+            <div className="d-flex flex-wrap gap-2 align-items-center">
+          {signed && session.can('InvoiceFullDocument') && <BusyButton className="btn btn-outline-secondary" onClick={() => download(`${base}/ubl`, `${i.documentNumber || i.id}.xml`)}><i className="bi bi-filetype-xml me-1" />UBL indir</BusyButton>}
+          {signed && !isPortal(i) && session.can('InvoiceFullDocument') && <BusyButton className="btn btn-outline-secondary" onClick={showQr}><i className="bi bi-qr-code me-1" />Karekod</BusyButton>}
           {signed && isPortal(i) && session.can('GibPortal') && <BusyButton className="btn btn-outline-secondary" onClick={async () => showHtml(await api.text(`${portal}/html`))}><i className="bi bi-file-earmark-richtext me-1" />GİB görünümü</BusyButton>}
           {signed && session.can('AuditRead') && <BusyButton className="btn btn-outline-secondary" onClick={verify}><i className="bi bi-shield-check me-1" />Kanıt doğrula</BusyButton>}
           {i.shareable && (session.can('InvoiceCreate') || session.can('InvoiceTransmit')) && <BusyButton className="btn btn-outline-primary" onClick={sendToCustomer}><i className="bi bi-send me-1" />Müşteriye gönder</BusyButton>}
-          <BusyButton className="btn btn-outline-secondary" onClick={() => download(`${base}/pdf`, `${i.documentNumber || i.draftNumber || i.id}.pdf`)}><i className="bi bi-filetype-pdf me-1" />PDF indir</BusyButton>
-          {i.shareable && (session.can('InvoiceCreate') || session.can('InvoiceTransmit')) && <BusyButton className="btn btn-outline-secondary" onClick={share}><i className="bi bi-link-45deg me-1" />Görüntüle / paylaş</BusyButton>}
+          {session.can('InvoiceFullDocument') && <>
+            <BusyButton className="btn btn-primary" onClick={() => download(`${base}/pdf`, `${i.documentNumber || i.draftNumber || i.id}.pdf`)}><i className="bi bi-filetype-pdf me-1" />PDF indir</BusyButton>
+            <BusyButton className="btn btn-outline-primary" onClick={showInvoice}><i className="bi bi-eye" aria-hidden="true" />Faturayı görüntüle</BusyButton>
+          </>}
+          <BusyButton className="btn btn-outline-secondary" onClick={share}><i className="bi bi-link-45deg me-1" />URL Kopyala</BusyButton>
+            </div>
+          </section>
         </div>
       </Card>
 
@@ -324,11 +367,12 @@ export function InvoiceDetail() {
           <Card title="Satırlar" icon="list-ul" bodyClass="">
             <div className="table-responsive">
               <table className="table align-middle mb-0">
-                <thead><tr><th>#</th><th>Mal / hizmet</th><th className="num">Miktar</th><th className="num">Birim fiyat</th><th className="num">İskonto</th><th className="num">KDV</th><th className="num">Tevkifat</th><th className="num">Tutar</th></tr></thead>
+                <thead><tr><th>#</th><th>Ürün kodu</th><th>Mal / hizmet</th><th className="num">Miktar</th><th className="num">Birim fiyat</th><th className="num">İskonto</th><th className="num">KDV</th><th className="num">Tevkifat</th><th className="num">Tutar</th></tr></thead>
                 <tbody>
                   {i.lines.map((l) => (
                     <tr key={l.lineNo}>
                       <td>{l.lineNo}</td>
+                      <td>{l.productCode || '—'}</td>
                       <td>{l.name}{l.description && <div className="small text-body-secondary">{l.description}</div>}</td>
                       <td className="num">{fmtNumber(l.quantity)} {UNIT_LABELS[l.unitCode] || l.unitCode}</td>
                       <td className="num">{fmtMoney(l.unitPrice, i.currency)}</td>

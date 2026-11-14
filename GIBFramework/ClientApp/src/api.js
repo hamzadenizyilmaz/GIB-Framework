@@ -75,6 +75,9 @@ async function request(method, path, { body, headers = {}, raw, responseType = '
       if (problem.code === 'MFA_REQUIRED') window.dispatchEvent(new Event(MFA_REQUIRED_EVENT));
     }
     const details = problem.details || (problem.errors ? Object.values(problem.errors).flat() : []);
+    if (response.status === 403 && path === '/api/v1/settings/ip-access' && !problem.code) {
+      throw new ApiError(403, 'IP_ACCESS_ADMIN_REQUIRED', 'IP erişimini düzenlemek için Platform Yöneticisi veya Genel Müdür yetkisi gerekir.');
+    }
     throw new ApiError(response.status, problem.code || `HTTP_${response.status}`, problem.title || response.statusText, details);
   }
 

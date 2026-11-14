@@ -64,7 +64,7 @@ public sealed partial class UserAdminService(
         return [.. (await users.ListAsync(scope, ct)).Select(u => UserView.From(u, now))];
     }
 
-    public async Task<UserView> UpdateAsync(Guid id, UserChanges changes, CancellationToken ct)
+    public async Task<UserView> UpdateAsync(Guid id, UserChanges changes, CancellationToken ct, bool removeAccess = false)
     {
         ArgumentNullException.ThrowIfNull(changes);
         var (roles, isActive) = (changes.Roles, changes.IsActive);
@@ -103,7 +103,7 @@ public sealed partial class UserAdminService(
         user.SecurityStamp = Guid.NewGuid();
         user.UpdatedAt = clock.UtcNow;
         await users.UpdateAsync(user, ct);
-        await AuditAsync(user, "USER_UPDATED", new { user.Roles, user.IsActive, user.DisplayName, user.Email, user.Phone }, ct);
+        await AuditAsync(user, removeAccess ? "USER_REMOVED" : "USER_UPDATED", new { user.Roles, user.IsActive }, ct);
         return UserView.From(user, clock.UtcNow);
     }
 
@@ -219,7 +219,7 @@ public sealed partial class UserAdminService(
     }
 
     private Task AuditAsync(UserAccount user, string action, object? data, CancellationToken ct) =>
-        audit.AppendSystemAsync(user.TenantId ?? Guid.Empty, new AuditEntry(action, "User", user.UserCode, "Success", new { by = context.UserId, data }), null, ct);
+        audit.AppendActorAsync(user.TenantId ?? Guid.Empty, new AuditEntry(action, "User", user.UserCode, "Success", data), ct);
 
     [GeneratedRegex("^[A-Za-z0-9._-]{3,50}$")]
     private static partial Regex UserCodePattern();

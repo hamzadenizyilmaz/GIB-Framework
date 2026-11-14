@@ -37,7 +37,7 @@ export function AppearanceSettings() {
   };
 
   return (
-    <SettingsLayout icon="palette" title="Görünüm" subtitle="Bu tarayıcıdaki panel görünümü"
+    <SettingsLayout icon="palette" title="Görünüm" subtitle="Tema, vurgu rengi, yoğunluk ve sayfa genişliği"
       actions={<button type="button" className="btn btn-outline-secondary btn-pill" onClick={() => { update(DEFAULT_APPEARANCE); toast('Varsayılan görünüm yüklendi.', 'info'); }}><i className="bi bi-arrow-counterclockwise me-1" />Varsayılan</button>}>
       <Card title="Tema" icon="circle-half" className="mb-4">
         <div className="row g-3">
@@ -53,53 +53,39 @@ export function AppearanceSettings() {
         </div>
       </Card>
 
-      <Card title="Vurgu rengi" icon="droplet-half" className="mb-4">
-        <div className="d-flex flex-wrap gap-4">
-          {Object.entries(ACCENTS).map(([key, a]) => (
-            <div key={key} className="text-center">
-              <button type="button" className={`accent-dot ${value.accent === key ? 'active' : ''}`} style={{ background: a.color }}
-                aria-label={a.label} aria-pressed={value.accent === key} onClick={() => update({ accent: key })}>
-                {value.accent === key && <i className="bi bi-check-lg" />}
-              </button>
-              <div className="small mt-1">{a.label}</div>
-            </div>
-          ))}
-        </div>
-        <hr />
-        <div className="d-flex flex-wrap gap-2 align-items-center">
-          <button type="button" className="btn btn-primary btn-sm">Birincil düğme</button>
-          <button type="button" className="btn btn-outline-primary btn-sm">İkincil düğme</button>
-          <span className="badge text-bg-primary">Etiket</span>
-          <a href="#/settings/appearance" onClick={(e) => e.preventDefault()}>Bağlantı</a>
-          <div className="form-check form-switch m-0 ms-2">
-            <input className="form-check-input" type="checkbox" role="switch" id="demoSwitch" defaultChecked />
-            <label className="form-check-label small" htmlFor="demoSwitch">Anahtar</label>
-          </div>
-        </div>
-      </Card>
-
       <div className="row g-4">
-        <div className="col-md-6">
-          <Card title="Yoğunluk" icon="distribute-vertical" className="h-100">
-            <div className="d-grid gap-2">
-              {DENSITIES.map(([key, label, text]) => (
-                <Choice key={key} active={value.density === key} onClick={() => update({ density: key })}>
-                  <div className="fw-semibold">{label}</div>
-                  <div className="small text-body-secondary">{text}</div>
-                </Choice>
-              ))}
-            </div>
-          </Card>
+        <div className="col-lg-6">
+        <Card title="Vurgu rengi" icon="droplet-half" className="h-100">
+          <div className="d-flex flex-wrap gap-3">
+            {Object.entries(ACCENTS).map(([key, a]) => (
+              <div key={key} className="text-center">
+                <button type="button" className={`accent-dot ${value.accent === key ? 'active' : ''}`} style={{ background: a.color }}
+                  aria-label={a.label} aria-pressed={value.accent === key} onClick={() => update({ accent: key })}>
+                  {value.accent === key && <i className="bi bi-check-lg" />}
+                </button>
+                <div className="small mt-1">{a.label}</div>
+              </div>
+            ))}
+          </div>
+        </Card>
         </div>
-        <div className="col-md-6">
-          <Card title="Sayfa genişliği" icon="arrows-angle-expand" className="h-100">
-            <div className="d-grid gap-2">
-              {WIDTHS.map(([key, label, text]) => (
-                <Choice key={key} active={value.width === key} onClick={() => update({ width: key })}>
-                  <div className="fw-semibold">{label}</div>
-                  <div className="small text-body-secondary">{text}</div>
-                </Choice>
-              ))}
+        <div className="col-lg-6">
+          <Card title="Yoğunluk ve sayfa genişliği" className="h-100">
+            <div className="mb-3">
+              <label className="form-label" htmlFor="appearance-density">Yoğunluk</label>
+              <select className="form-select" id="appearance-density" value={value.density}
+                onChange={(event) => update({ density: event.target.value })}>
+                {DENSITIES.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+              </select>
+              <div className="form-text">{DENSITIES.find(([key]) => key === value.density)?.[2]}</div>
+            </div>
+            <div>
+              <label className="form-label" htmlFor="appearance-width">Sayfa genişliği</label>
+              <select className="form-select" id="appearance-width" value={value.width}
+                onChange={(event) => update({ width: event.target.value })}>
+                {WIDTHS.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+              </select>
+              <div className="form-text">{WIDTHS.find(([key]) => key === value.width)?.[2]}</div>
             </div>
           </Card>
         </div>

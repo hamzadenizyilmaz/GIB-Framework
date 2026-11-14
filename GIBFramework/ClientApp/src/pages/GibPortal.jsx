@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link, useSearchParams } from 'react-router';
 import { api } from '../api.js';
 import { fmtDate } from '../format.js';
 import { validateTaxId } from '../taxid.js';
@@ -6,6 +7,7 @@ import { TaxIdInput } from '../components/inputs.jsx';
 import { BusyButton, Card, ErrorAlert, PageHeader, Spinner, useLoad, useToast } from '../components/ui.jsx';
 
 function ConnectForm({ status, onConnected }) {
+  const [params] = useSearchParams();
   const toast = useToast();
   const [environment, setEnvironment] = useState('Test');
   const [userCode, setUserCode] = useState('');
@@ -38,9 +40,9 @@ function ConnectForm({ status, onConnected }) {
   };
 
   return (
-    <Card title="Bağlan" icon="plug">
+    <Card title="GİB e-Arşiv bağlantısı">
       <ErrorAlert error={error} />
-      <form noValidate autoComplete="off" onSubmit={(e) => { e.preventDefault(); connect(); }}>
+      <form className="portal-connection-form" noValidate autoComplete="off" onSubmit={(e) => { e.preventDefault(); connect(); }}>
         <div className="mb-3">
           <div className="form-label">Ortam</div>
           <div className="btn-group w-100" role="group" aria-label="Ortam">
@@ -51,21 +53,23 @@ function ConnectForm({ status, onConnected }) {
           </div>
         </div>
         {environment === 'Test' && (
-          <div className="d-flex justify-content-between align-items-center border rounded p-2 mb-3 bg-body-tertiary">
+          <div className={`d-flex flex-wrap gap-2 justify-content-between align-items-center border rounded p-2 mb-3 ${params.get('test-user') === '1' ? 'portal-test-highlight' : 'bg-body-tertiary'}`}>
             <span className="small">e-Arşiv test portalından hazır test hesabı</span>
             <BusyButton className="btn btn-sm btn-outline-primary" onClick={testUser}><i className="bi bi-person-plus me-1" />Test kullanıcısı al</BusyButton>
           </div>
         )}
-        <div className="mb-3">
-          <label className="form-label" htmlFor="gib-user">GİB kullanıcı kodu</label>
-          <input className="form-control" id="gib-user" maxLength={50} autoComplete="off" value={userCode} onChange={(e) => setUserCode(e.target.value)} />
+        <div className="portal-credentials">
+          <div className="mb-3">
+            <label className="form-label" htmlFor="gib-user">GİB kullanıcı kodu</label>
+            <input className="form-control" id="gib-user" maxLength={50} autoComplete="off" value={userCode} onChange={(e) => setUserCode(e.target.value)} />
+          </div>
+          <div className="mb-3">
+            <label className="form-label" htmlFor="gib-pass">GİB şifresi</label>
+            <input className="form-control" id="gib-pass" type="password" maxLength={100} autoComplete="off" value={password} onChange={(e) => setPassword(e.target.value)} />
+            <div className="form-text">Şifre saklanmaz.</div>
+          </div>
         </div>
-        <div className="mb-3">
-          <label className="form-label" htmlFor="gib-pass">GİB şifresi</label>
-          <input className="form-control" id="gib-pass" type="password" maxLength={100} autoComplete="off" value={password} onChange={(e) => setPassword(e.target.value)} />
-          <div className="form-text">Şifre saklanmaz.</div>
-        </div>
-        <BusyButton className="btn btn-primary" onClick={connect}><i className="bi bi-box-arrow-in-right me-1" />GİB'e bağlan</BusyButton>
+        <BusyButton className="btn btn-primary w-100" onClick={connect}><i className="bi bi-link-45deg" aria-hidden="true" />Bağlan</BusyButton>
       </form>
     </Card>
   );
@@ -101,15 +105,17 @@ function RecipientLookup() {
 
 export function GibPortal() {
   const toast = useToast();
-  const { data: status, loading, reload } = useLoad(() => api.get('/api/v1/gib-portal/status'), []);
+  const { data: status, loading, error, reload } = useLoad(() => api.get('/api/v1/gib-portal/status'), []);
 
   if (loading && !status) return <Spinner />;
 
   return (
     <>
-      <PageHeader icon="bank" title="GİB e-Arşiv Portal" />
-      <div className="row g-4">
-        <div className="col-lg-6">
+      <PageHeader icon="bank" title="GİB e-Arşiv Portal" subtitle="Portal oturumunu ve test veya canlı ortam bağlantısını yönetin."
+        actions={<Link className="btn btn-primary" to="/gib-portal/documents"><i className="bi bi-search" aria-hidden="true" />Belgeleri görüntüle</Link>} />
+      {error && <Card title="Portal durumu alınamadı"><ErrorAlert error={error} /><BusyButton onClick={reload}>Tekrar dene</BusyButton></Card>}
+      {status && <div className="portal-shell">
+        <div>
           {status.connected ? (
             <Card title="Bağlantı" icon="plug" className="border-success">
               <h2 className="h5"><span className="badge text-bg-success me-2">Bağlı</span>{status.environment === 'Production' ? 'Canlı ortam' : 'Test ortamı'}</h2>
@@ -127,7 +133,7 @@ export function GibPortal() {
             </Card>
           ) : <ConnectForm status={status} onConnected={reload} />}
         </div>
-        <div className="col-lg-6">
+        <div>
           <Card title="Akış" icon="diagram-3" className="h-100">
             <ol className="small mb-3">
               <li>Faturayı oluşturun, doğrulamaya gönderin ve onaylatın.</li>
@@ -143,7 +149,7 @@ export function GibPortal() {
             )}
           </Card>
         </div>
-      </div>
+      </div>}
     </>
   );
 }

@@ -198,7 +198,8 @@ public sealed partial class InvoiceService(
         invoice.ApprovedBy = actor.UserId;
         invoice.ApprovedAt = clock.UtcNow;
         await TransitionAsync(scope, invoice, DocumentStatus.Approved, actor, null, ct);
-        await AuditAsync(scope, tenantId, actor, "INVOICE_APPROVED", invoice, null, ct);
+        await AuditAsync(scope, tenantId, actor, "INVOICE_APPROVED", invoice,
+            new { selfApproval = string.Equals(invoice.CreatedBy, actor.UserId, StringComparison.OrdinalIgnoreCase) }, ct);
         await scope.Transaction.CommitAsync(ct);
         return invoice;
     }

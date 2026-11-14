@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { api } from '../api.js';
-import { fmtDate, fmtMoney, istanbulNow, ROLE_LABELS } from '../format.js';
+import { fmtDate, fmtMoney, istanbulNow } from '../format.js';
 import { useSession } from '../session.jsx';
-import { Card, DocTypeBadge, Empty, ErrorAlert, Spinner, StatusBadge, useLoad } from '../components/ui.jsx';
+import { Card, DocTypeBadge, Empty, ErrorAlert, PageHeader, Spinner, StatusBadge, useLoad } from '../components/ui.jsx';
 
 const MONTHS = ['Oca', 'Şub', 'Mar', 'Nis', 'May', 'Haz', 'Tem', 'Ağu', 'Eyl', 'Eki', 'Kas', 'Ara'];
 const ISSUED = new Set(['Sent', 'Acknowledged', 'Delivered', 'Accepted']);
@@ -14,29 +14,20 @@ const TASKS = [
   { task: 'draft', policy: 'InvoiceCreate', title: 'Taslaklarınız', icon: 'pencil-square', color: 'secondary', empty: 'Taslak yok.' },
 ];
 
-function greeting(hour) {
-  if (hour < 6) return 'İyi geceler';
-  if (hour < 12) return 'Günaydın';
-  if (hour < 18) return 'İyi günler';
-  return 'İyi akşamlar';
-}
-
 function Kpi({ icon, color, label, value, hint }) {
   return (
     <div className="card stat-card shadow-sm h-100">
-      <div className="card-body d-flex align-items-center gap-3">
-        <span className={`stat-icon bg-${color}-subtle text-${color}-emphasis`}><i className={`bi bi-${icon}`} /></span>
-        <div className="min-w-0">
-          <div className="stat-value text-truncate">{value}</div>
-          <div className="small text-body-secondary">{label}</div>
-          {hint && <div className="small text-body-tertiary">{hint}</div>}
-        </div>
+      <div className="card-body ivory-kpi">
+        <div className="ivory-kpi-label">{label}</div>
+        <div className="stat-value">{value}</div>
+        {hint && <span className={`badge text-bg-${color}`}><i className={`bi bi-${icon} me-1`} aria-hidden="true" />{hint}</span>}
       </div>
     </div>
   );
 }
 
 function MonthlyChart({ groups, currency }) {
+  const gradient = useId();
   const now = istanbulNow().date;
   const [y, m] = now.split('-').map(Number);
   const months = Array.from({ length: 6 }, (_, i) => {
@@ -45,17 +36,36 @@ function MonthlyChart({ groups, currency }) {
   });
   const totals = months.map((mo) => groups
     .filter((i) => i.currency === currency && ISSUED.has(i.status) && i.month?.startsWith(mo.key))
-    .reduce((s, i) => s + i.amount, 0));
-  const max = Math.max(...totals, 1);
+    .reduce((s, i) => s + Number(i.amount || 0), 0));
+  const maximum = Math.max(...totals, 1);
+  const minimum = Math.min(...totals, 0);
+  const top = 16;
+  const bottom = 168;
+  const points = totals.map((total, index) => [55 + index * 100, bottom - (total - minimum) * (bottom - top) / (maximum - minimum)]);
+  const line = points.reduce((path, [x, y], index) => {
+    if (!index) return `M ${x} ${y}`;
+    const [previousX, previousY] = points[index - 1];
+    const midpoint = (previousX + x) / 2;
+    return `${path} C ${midpoint} ${previousY}, ${midpoint} ${y}, ${x} ${y}`;
+  }, '');
+  const ticks = [0, 1, 2, 3, 4];
+  const number = new Intl.NumberFormat('tr-TR', { notation: 'compact', maximumFractionDigits: 1 });
   return (
-    <div className="chart-bars" role="img" aria-label={months.map((mo, i) => `${mo.label} ${fmtMoney(totals[i], currency)}`).join(', ')}>
-      {months.map((mo, i) => (
-        <div className="chart-bar" key={mo.key} title={`${mo.label}: ${fmtMoney(totals[i], currency)}`}>
-          <small className="fw-semibold text-body">{totals[i] ? fmtMoney(totals[i], currency) : ''}</small>
-          <div className={`bar ${totals[i] ? '' : 'muted'}`} style={{ height: `${Math.max(3, (totals[i] / max) * 100)}%` }} />
-          <small>{mo.label}</small>
-        </div>
-      ))}
+    <div className="ivory-chart">
+      <div className="ivory-chart-summary"><strong>{fmtMoney(totals.reduce((sum, total) => sum + total, 0), currency)}</strong><small>6 aylık toplam</small></div>
+      <svg viewBox="0 0 590 207" role="img" aria-label={months.map((mo, i) => `${mo.label}: ${fmtMoney(totals[i], currency)}`).join(', ')}>
+        <defs><linearGradient id={gradient} x1="0" y1="0" x2="0" y2="1"><stop stopColor="currentColor" stopOpacity=".22" /><stop offset="100%" stopColor="currentColor" stopOpacity=".02" /></linearGradient></defs>
+        {ticks.map((tick) => {
+          const y = top + tick * (bottom - top) / 4;
+          return <g key={tick}><line x1="49" x2="575" y1={y} y2={y} className="ivory-chart-grid" /><text x="0" y={y + 4}>{number.format(maximum - tick * (maximum - minimum) / 4)}</text></g>;
+        })}
+        <path d={`${line} L 555 ${bottom} H 55 Z`} fill={`url(#${gradient})`} />
+        <path d={line} stroke="currentColor" strokeWidth="2.5" fill="none" />
+        {points.map(([x, y], index) => <g key={months[index].key}>
+          <circle cx={x} cy={y} r="3" stroke="currentColor" strokeWidth="1.8" className="ivory-chart-point"><title>{months[index].label}: {fmtMoney(totals[index], currency)}</title></circle>
+          <text x={x} y="194" textAnchor="middle">{months[index].label}</text>
+        </g>)}
+      </svg>
     </div>
   );
 }
@@ -66,7 +76,9 @@ function TaskList({ task, title, icon, color, empty }) {
   const { data, loading, error, reload } = useLoad(() => api.get(`/api/v1/invoices/tasks/${task}?skip=${skip}&take=5`), [task, skip]);
   const items = data?.items || [];
   return (
-    <Card title={<>{title} {data && <span className={`badge text-bg-${color} ms-1`}>{data.total}</span>}</>} icon={icon} bodyClass="">
+    <details className="ivory-task">
+      <summary><span className={`badge text-bg-${color}`}>{data?.total ?? '—'}</span><i className={`bi bi-${icon}`} aria-hidden="true" />{title}</summary>
+      <div className="ivory-task-content">
       {loading ? <div className="px-3"><Spinner /></div> : error ? (
         <div className="card-body"><ErrorAlert error={error} /><button className="btn btn-outline-secondary btn-sm" onClick={reload}>Tekrar dene</button></div>
       ) : items.length ? (
@@ -86,7 +98,8 @@ function TaskList({ task, title, icon, color, empty }) {
         <button className="btn btn-outline-secondary btn-sm" disabled={skip === 0} onClick={() => setSkip(skip - 5)}>Önceki</button>
         <button className="btn btn-outline-secondary btn-sm" disabled={skip + 5 >= data.total} onClick={() => setSkip(skip + 5)}>Sonraki</button>
       </div>}
-    </Card>
+      </div>
+    </details>
   );
 }
 
@@ -121,19 +134,10 @@ export function Dashboard() {
 
   return (
     <>
-      <div className="hero mb-4 shadow-sm">
-        <div className="position-relative" style={{ zIndex: 1 }}>
-          <div className="small opacity-75 mb-1">{fmtDate(now.date)} · {session.tenant?.name || 'Platform'}</div>
-          <h1 className="h3 fw-bold mb-1">{greeting(Number(now.time.slice(0, 2)))}, {p.displayName || p.userId}</h1>
-          <div className="opacity-75 mb-3">{p.roles.map((r) => ROLE_LABELS[r] || r).join(' · ')}</div>
-          <div className="d-flex flex-wrap gap-2">
-            {session.can('InvoiceCreate') && tenantId && <Link className="btn btn-light btn-pill px-4" to="/invoices/new"><i className="bi bi-plus-lg me-1" />Yeni fatura</Link>}
-            {session.can('InvoiceRead') && tenantId && <Link className="btn btn-outline-light btn-pill px-4" to="/invoices"><i className="bi bi-list-ul me-1" />Tüm faturalar</Link>}
-            {session.can('PlatformAdmin') && <Link className="btn btn-outline-light btn-pill px-4" to="/settings/tenants"><i className="bi bi-buildings me-1" />Firmalar</Link>}
-            <Link className="btn btn-outline-light btn-pill px-4" to="/settings"><i className="bi bi-gear me-1" />Ayarlar</Link>
-          </div>
-        </div>
-      </div>
+      <PageHeader title="Genel bakış" subtitle="Firma işlemleri, belge durumları ve bekleyen görevler" actions={<>
+        {session.can('InvoiceCreate') && tenantId && <Link className="btn btn-primary" to="/invoices/new"><i className="bi bi-plus-lg" aria-hidden="true" />Yeni fatura</Link>}
+        {session.can('PlatformAdmin') && <Link className="btn btn-outline-secondary" to="/settings/tenants"><i className="bi bi-buildings" aria-hidden="true" />Firmalar</Link>}
+      </>} />
 
       {!tenantId && (
         <div className="alert alert-info d-flex align-items-center gap-2"><i className="bi bi-info-circle" />Fatura işlemleri için üst çubuktan bir firma seçin.</div>
@@ -144,30 +148,33 @@ export function Dashboard() {
       </Card> : (
         <>
           {invoices && (
-            <div className="row row-cols-1 row-cols-sm-2 row-cols-xl-3 g-3 mb-4">
-              <div className="col"><Kpi icon="cash-stack" color="primary" label={`Bu ay düzenlenen · ${currency}`} value={fmtMoney(monthTotal, currency)} hint={`${count(monthItems)} fatura`} /></div>
-              <div className="col"><Kpi icon="file-earmark-text" color="info" label="e-Arşiv / e-Fatura" value={`${count(groups.filter((i) => i.documentType === 'EArsiv'))} / ${count(groups.filter((i) => i.documentType === 'EFatura'))}`} /></div>
-              <div className="col"><Kpi icon="check2-circle" color="success" label="Gönderildi" value={count(groups.filter((i) => ISSUED.has(i.status)))} hint={`Toplam ${count(groups)} fatura`} /></div>
+            <div className="row row-cols-2 row-cols-xl-4 g-3 mb-4">
+              <div className="col"><Kpi icon="file-earmark-text" color="secondary" label="Bu ayın belgeleri" value={count(groups.filter((i) => i.month?.startsWith(thisMonth)))} /></div>
+              <div className="col"><Kpi icon="cash-stack" color="success" label={`Bu ayın cirosu · ${currency}`} value={fmtMoney(monthTotal, currency)} hint={`${count(monthItems)} düzenlenen fatura`} /></div>
+              <div className="col"><Kpi icon="clock" color="warning" label="Onay bekleyen" value={count(groups.filter((i) => i.status === 'AwaitingApproval'))} /></div>
+              <div className="col"><Kpi icon="send" color="success" label="Gönderilen" value={count(groups.filter((i) => ISSUED.has(i.status)))} hint={`Toplam ${count(groups)} fatura`} /></div>
             </div>
           )}
 
           <div className="row g-4">
             <div className="col-xl-8 d-flex flex-column gap-4">
               {invoices && (
-                <Card title="Son 6 ay" icon="bar-chart" actions={
-                  <select className="form-select form-select-sm" aria-label="Para birimi" value={currency} onChange={(event) => setCurrency(event.target.value)}>
+                <Card title="Fatura hacmi" actions={
+                  <select className="form-select form-select-sm w-auto" aria-label="Para birimi" value={currency} onChange={(event) => setCurrency(event.target.value)}>
                     {currencies.map((code) => <option key={code}>{code}</option>)}
                   </select>}>
                   <MonthlyChart groups={groups} currency={currency} />
                 </Card>
               )}
-              {tasks.length > 0 && (
-                <div className="row g-4">
-                  {tasks.map((t) => <div className="col-md-6" key={t.task}><TaskList {...t} /></div>)}
-                </div>
-              )}
+            </div>
+            {tasks.length > 0 && <div className="col-xl-4">
+              <Card title="Aksiyon merkezi" className="h-100">
+                <p className="small text-body-secondary">Yetki kapsamınızdaki iş kuyruğu</p>
+                {tasks.map((t) => <TaskList key={t.task} {...t} />)}
+              </Card>
+            </div>}
               {invoices && (
-                <Card title="Son faturalar" icon="clock-history" bodyClass=""
+                <div className="col-12"><Card title="Son faturalar" bodyClass="invoice-table-body"
                   actions={<Link className="btn btn-sm btn-outline-primary btn-pill px-3" to="/invoices">Tümü</Link>}>
                   {invoices.length ? (
                     <div className="table-responsive">
@@ -188,11 +195,10 @@ export function Dashboard() {
                       </table>
                     </div>
                   ) : <Empty icon="receipt">Henüz fatura yok.</Empty>}
-                </Card>
+                </Card></div>
               )}
-            </div>
 
-            <div className="col-xl-4 d-flex flex-column gap-4">
+            <div className="col-12"><div className="dashboard-system-grid">
               {data?.portal && (
                 <Card title="GİB e-Arşiv Portal" icon="bank">
                   {data.portal.connected ? (
@@ -230,7 +236,7 @@ export function Dashboard() {
                   <Link className="btn btn-sm btn-outline-primary btn-pill px-3 mt-3" to="/settings/locations">Görüntüle</Link>
                 </Card>
               )}
-            </div>
+            </div></div>
           </div>
         </>
       )}

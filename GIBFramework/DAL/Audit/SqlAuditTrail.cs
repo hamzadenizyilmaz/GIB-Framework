@@ -3,16 +3,21 @@ using System.Diagnostics;
 using Microsoft.Data.SqlClient;
 using GIBFramework.Base.Extensions;
 using GIBFramework.Models.Audit;
+using GIBFramework.Services.Auth;
 
 namespace GIBFramework.DAL.Audit;
 
-public sealed class SqlAuditTrail(SqlConnectionFactory connections, ITenantContext context, IClock clock) : IAuditTrail
+public sealed class SqlAuditTrail(SqlConnectionFactory connections, ITenantContext context, IClock clock, IHttpContextAccessor http) : IAuditTrail
 {
+    private ActorType CurrentActor => context.IsSystem ? ActorType.System
+        : http.HttpContext?.User.Identity?.AuthenticationType == ApiKeyAuthenticationHandler.SchemeName
+            || context.UserId?.StartsWith("entegrasyon:", StringComparison.Ordinal) == true ? ActorType.ApiClient : ActorType.User;
+
     public Task<AuditEvent> AppendAsync(AuditEntry entry, DbScope? scope, CancellationToken cancellationToken) =>
         AppendCoreAsync(
             context.RequireTenant(),
             context.UserId,
-            context.IsSystem ? ActorType.System : ActorType.User,
+            CurrentActor,
             entry,
             scope,
             system: false,
@@ -21,15 +26,29 @@ public sealed class SqlAuditTrail(SqlConnectionFactory connections, ITenantConte
     public Task<AuditEvent> AppendSystemAsync(Guid tenantId, AuditEntry entry, DbScope? scope, CancellationToken cancellationToken) =>
         AppendCoreAsync(tenantId, "system", ActorType.System, entry, scope, system: true, cancellationToken);
 
-    public async Task<IReadOnlyList<AuditEvent>> ListAsync(Guid tenantId, string? entityId, int take, long? beforeSequence, CancellationToken cancellationToken)
+    public Task<AuditEvent> AppendActorAsync(Guid tenantId, AuditEntry entry, CancellationToken cancellationToken) =>
+        AppendCoreAsync(tenantId, context.UserId, CurrentActor,
+            entry, null, system: false, cancellationToken);
+
+    public async Task<IReadOnlyList<AuditEvent>> ListAsync(Guid tenantId, string? entityId, int take, long? beforeSequence,
+        CancellationToken cancellationToken, string? userId = null, string? action = null, string? role = null,
+        DateTimeOffset? from = null, DateTimeOffset? until = null, string? result = null)
     {
         await using var connection = await connections.OpenForTenantAsync(tenantId, cancellationToken);
         await using var cmd = connection.Command("""
             SELECT TOP (@take) * FROM dbo.AuditEvents
              WHERE TenantId = @t AND (@e IS NULL OR EntityId = @e) AND (@b IS NULL OR Sequence < @b)
+               AND (@u IS NULL OR UserId = @u) AND (@a IS NULL OR Action = @a)
+               AND (@from IS NULL OR TimestampUtc >= @from) AND (@until IS NULL OR TimestampUtc < @until)
+               AND (@result IS NULL OR Result = @result)
+               AND (@role IS NULL OR EXISTS (
+                   SELECT 1 FROM OPENJSON(CASE WHEN ISJSON(DataJson) = 1 THEN DataJson ELSE N'{}' END, '$.actorRoles')
+                   WHERE [value] = @role))
              ORDER BY Sequence DESC
             """);
         cmd.With("@take", Math.Clamp(take, 1, 500)).With("@t", tenantId).With("@e", entityId).With("@b", beforeSequence);
+        cmd.With("@u", userId).With("@a", action).With("@role", role);
+        cmd.With("@from", from).With("@until", until).With("@result", result);
         return await ReadAsync(cmd, cancellationToken);
     }
 
@@ -102,12 +121,14 @@ public sealed class SqlAuditTrail(SqlConnectionFactory connections, ITenantConte
                 EntityId = entry.EntityId,
                 TimestampUtc = clock.UtcNow,
                 Ip = system ? null : context.Ip,
-                UserAgent = system ? null : context.UserAgent,
+                UserAgent = system ? null : Truncate(context.UserAgent, 400),
                 CorrelationId = context.CorrelationId,
                 TraceId = Activity.Current?.TraceId.ToString(),
                 Result = entry.Result,
                 FailureReason = entry.FailureReason,
-                DataJson = entry.Data is null ? null : JsonDefaults.Serialize(entry.Data),
+                DataJson = !system && context.Roles.Count > 0
+                    ? JsonDefaults.Serialize(new { actorRoles = context.Roles, details = entry.Data })
+                    : entry.Data is null ? null : JsonDefaults.Serialize(entry.Data),
                 PreviousHash = previous,
             };
             evt = evt with { Hash = evt.ComputeHash() };

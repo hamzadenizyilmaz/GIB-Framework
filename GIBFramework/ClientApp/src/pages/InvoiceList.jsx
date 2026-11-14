@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { Link, useNavigate, useSearchParams } from 'react-router';
 import { api } from '../api.js';
 import { fmtDate, fmtMoney, STATUS } from '../format.js';
 import { useSession } from '../session.jsx';
@@ -9,10 +9,16 @@ const PAGE_SIZES = [[25, '25'], [50, '50'], [100, '100'], [500, '500'], [5000, '
 const EMPTY = { q: '', status: '', documentType: '', from: '', to: '' };
 
 export function InvoiceList() {
+  const [params] = useSearchParams();
+  const q = params.get('q')?.slice(0, 100) || '';
+  return <InvoiceResults key={q} initialQuery={q} />;
+}
+
+function InvoiceResults({ initialQuery }) {
   const session = useSession();
   const navigate = useNavigate();
-  const [draft, setDraft] = useState(EMPTY);
-  const [filters, setFilters] = useState({ ...EMPTY, skip: 0, take: 50 });
+  const [draft, setDraft] = useState({ ...EMPTY, q: initialQuery });
+  const [filters, setFilters] = useState({ ...EMPTY, q: initialQuery, skip: 0, take: 50 });
 
   const { data, loading, error } = useLoad(() => {
     const q = new URLSearchParams({ take: String(filters.take), skip: String(filters.skip) });
@@ -29,23 +35,23 @@ export function InvoiceList() {
 
   return (
     <>
-      <PageHeader icon="receipt" title="Faturalar" subtitle={`${total} fatura`}
+      <PageHeader icon="receipt" title="Faturalar" subtitle={`${new Intl.NumberFormat('tr-TR').format(total)} fatura · Belge sorgulama`}
         actions={session.can('InvoiceCreate') && <Link className="btn btn-primary" to="/invoices/new"><i className="bi bi-plus-lg me-1" />Yeni fatura</Link>} />
 
-      <Card className="mb-4">
-        <form className="row g-2 align-items-end" onSubmit={(e) => { e.preventDefault(); setFilters((f) => ({ ...f, ...draft, q: draft.q.trim(), skip: 0 })); }}>
-          <div className="col-lg-3">
+      <Card className="mb-4" title="Arama ve filtreler">
+        <form className="invoice-filters" onSubmit={(e) => { e.preventDefault(); setFilters((f) => ({ ...f, ...draft, q: draft.q.trim(), skip: 0 })); }}>
+          <div>
             <label className="form-label small" htmlFor="f-q">Ara</label>
             <input className="form-control" id="f-q" placeholder="Belge no, taslak no, alıcı, VKN/TCKN" maxLength={100} value={draft.q} onChange={set('q')} />
           </div>
-          <div className="col-sm-6 col-lg-2">
+          <div>
             <label className="form-label small" htmlFor="f-status">Durum</label>
             <select className="form-select" id="f-status" value={draft.status} onChange={set('status')}>
               <option value="">Tümü</option>
               {Object.entries(STATUS).map(([k, [label]]) => <option key={k} value={k}>{label}</option>)}
             </select>
           </div>
-          <div className="col-sm-6 col-lg-2">
+          <div>
             <label className="form-label small" htmlFor="f-type">Tür</label>
             <select className="form-select" id="f-type" value={draft.documentType} onChange={set('documentType')}>
               <option value="">Tümü</option>
@@ -53,13 +59,13 @@ export function InvoiceList() {
               <option value="EFatura">e-Fatura</option>
             </select>
           </div>
-          <div className="col-sm-6 col-lg-2"><label className="form-label small" htmlFor="f-from">Başlangıç</label><input className="form-control" type="date" id="f-from" value={draft.from} onChange={set('from')} /></div>
-          <div className="col-sm-6 col-lg-2"><label className="form-label small" htmlFor="f-to">Bitiş</label><input className="form-control" type="date" id="f-to" value={draft.to} onChange={set('to')} /></div>
-          <div className="col-lg-1 d-grid"><button className="btn btn-primary" type="submit" title="Filtrele"><i className="bi bi-funnel" /></button></div>
+          <div><label className="form-label small" htmlFor="f-from">Başlangıç</label><input className="form-control" type="date" id="f-from" value={draft.from} onChange={set('from')} /></div>
+          <div><label className="form-label small" htmlFor="f-to">Bitiş</label><input className="form-control" type="date" id="f-to" value={draft.to} onChange={set('to')} /></div>
+          <button className="btn btn-primary" type="submit"><i className="bi bi-sliders" aria-hidden="true" />Filtrele</button>
         </form>
       </Card>
 
-      <Card bodyClass="" footer={(
+      <Card title="Belge kayıtları" bodyClass="invoice-table-body" footer={(
         <div className="d-flex flex-wrap justify-content-between align-items-center gap-2">
           <div className="d-flex align-items-center gap-2 small text-body-secondary">
             <span>Sayfa başına</span>

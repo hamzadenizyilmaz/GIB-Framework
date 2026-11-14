@@ -32,6 +32,8 @@ public sealed class RequestTenantContext : ITenantContext
         TenantId = tenantId;
         UserId = "system";
         Roles = [];
+        Ip = null;
+        UserAgent = null;
         IsSystem = true;
         CorrelationId = correlationId ?? Guid.NewGuid().ToString("N");
     }

@@ -379,6 +379,57 @@ public sealed class IntegrationRepository(SqlConnectionFactory connections)
         return (int)(await cmd.With("@t", tenantId).With("@i", integrationId).With("@e", externalId).ExecuteScalarAsync(ct) ?? 0) > 0;
     }
 
+    public async Task<DateTimeOffset?> InboundCooldownAsync(Guid tenantId, Guid integrationId, DateTimeOffset now, CancellationToken ct)
+    {
+        await using var c = await connections.OpenForTenantAsync(tenantId, ct);
+        await using var cmd = c.Command("""
+            SELECT MAX(NextAttemptAt) FROM dbo.IntegrationDeliveries
+            WHERE TenantId = @t AND IntegrationId = @i AND Direction = 'In' AND HttpStatus = 429 AND NextAttemptAt > @now
+            """);
+        return await cmd.With("@t", tenantId).With("@i", integrationId).With("@now", now).ExecuteScalarAsync(ct) is DateTimeOffset due
+            ? due : null;
+    }
+
+    public async Task<IReadOnlyList<IntegrationDelivery>> PendingImportsAsync(Guid tenantId, Guid integrationId, DateTimeOffset? due, Guid? deliveryId, CancellationToken ct)
+    {
+        await using var c = await connections.OpenForTenantAsync(tenantId, ct);
+        await using var cmd = c.Command("""
+            SELECT TOP (50) * FROM dbo.IntegrationDeliveries
+            WHERE TenantId = @t AND IntegrationId = @i AND Direction = 'In' AND EventType = 'marketplace.import'
+              AND ((@id IS NULL AND Status = 'Pending' AND NextAttemptAt <= @due)
+                   OR (@id IS NOT NULL AND Id = @id AND Status IN ('Pending', 'Failed')))
+            ORDER BY NextAttemptAt, Id
+            """);
+        cmd.With("@t", tenantId).With("@i", integrationId).With("@due", due).With("@id", deliveryId);
+        return await ReadDeliveriesAsync(cmd, ct);
+    }
+
+    public async Task<bool> ImportQueuedAsync(Guid tenantId, Guid integrationId, string externalId, CancellationToken ct)
+    {
+        await using var c = await connections.OpenForTenantAsync(tenantId, ct);
+        await using var cmd = c.Command("""
+            SELECT COUNT(*) FROM dbo.IntegrationDeliveries
+            WHERE TenantId = @t AND IntegrationId = @i AND ExternalId = @ext AND EventType IN ('marketplace.import', 'marketplace.micro-export')
+            """);
+        return (int)(await cmd.With("@t", tenantId).With("@i", integrationId).With("@ext", externalId).ExecuteScalarAsync(ct) ?? 0) > 0;
+    }
+
+    public async Task FinishImportAsync(IntegrationDelivery delivery, DeliveryStatus status, int httpStatus, Guid? invoiceId,
+        string? error, DateTimeOffset? retry, DateTimeOffset now, CancellationToken ct)
+    {
+        await using var c = await connections.OpenForTenantAsync(delivery.TenantId, ct);
+        await using var cmd = c.Command("""
+            UPDATE dbo.IntegrationDeliveries SET Status = @st, HttpStatus = @http, InvoiceId = @inv,
+                Attempts = Attempts + 1, NextAttemptAt = @retry, Error = @error,
+                CompletedAt = CASE WHEN @st = 'Pending' THEN NULL ELSE @now END,
+                RequestBody = CASE WHEN @st = 'Succeeded' THEN NULL ELSE RequestBody END
+            WHERE TenantId = @t AND IntegrationId = @i AND Id = @id AND Direction = 'In' AND EventType = 'marketplace.import'
+            """);
+        await cmd.With("@t", delivery.TenantId).With("@i", delivery.IntegrationId).With("@id", delivery.Id)
+            .With("@st", status.ToString()).With("@http", httpStatus).With("@inv", invoiceId)
+            .With("@retry", retry).With("@error", error).With("@now", now).ExecuteNonQueryAsync(ct);
+    }
+
     public async Task<IReadOnlyList<Integration>> ActiveByKindsAsync(IReadOnlyCollection<IntegrationKind> kinds, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(kinds);
@@ -423,7 +474,8 @@ public sealed class IntegrationRepository(SqlConnectionFactory connections)
             """);
         await cmd.With("@id", d.Id).With("@t", d.TenantId).With("@i", d.IntegrationId).With("@dir", d.Direction.ToString()).With("@ev", d.EventType)
             .With("@st", d.Status.ToString()).With("@http", d.HttpStatus).With("@att", d.Attempts).With("@next", d.NextAttemptAt)
-            .WithMax("@req", Cap(d.RequestBody)).WithMax("@res", Cap(d.ResponseBody)).With("@err", d.Error is null ? null : OutboxEventRepository.Truncate(d.Error, 2000))
+            .WithMax("@req", d.RequestBody?.StartsWith("protected:", StringComparison.Ordinal) == true ? d.RequestBody : Cap(d.RequestBody))
+            .WithMax("@res", Cap(d.ResponseBody)).With("@err", d.Error is null ? null : OutboxEventRepository.Truncate(d.Error, 2000))
             .With("@inv", d.InvoiceId).With("@ext", d.ExternalId).With("@at", d.CreatedAt).With("@done", d.CompletedAt)
             .With("@leaseId", d.LeaseId).With("@outbox", d.OutboxEventId).ExecuteNonQueryAsync(ct);
     }

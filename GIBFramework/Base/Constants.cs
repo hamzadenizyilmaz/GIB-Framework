@@ -56,10 +56,12 @@ public static class Policies
     public const string GibPortal = nameof(GibPortal);
     public const string IncomingManage = nameof(IncomingManage);
     public const string IntegrationManage = nameof(IntegrationManage);
+    public const string IpAccessManage = nameof(IpAccessManage);
     public const string InvoiceApprove = nameof(InvoiceApprove);
     public const string InvoiceCancel = nameof(InvoiceCancel);
     public const string InvoiceCreate = nameof(InvoiceCreate);
     public const string InvoiceRead = nameof(InvoiceRead);
+    public const string InvoiceFullDocument = nameof(InvoiceFullDocument);
     public const string InvoiceSign = nameof(InvoiceSign);
     public const string InvoiceTransmit = nameof(InvoiceTransmit);
     public const string MessagingManage = nameof(MessagingManage);
@@ -73,6 +75,7 @@ public static class Policies
     public static IReadOnlyList<PolicyDefinition> Catalog { get; } =
     [
         new(InvoiceRead, "Faturaları görüntüleme", "Fatura"),
+        new(InvoiceFullDocument, "Faturanın tamamını görüntüleme ve indirme", "Fatura"),
         new(InvoiceCreate, "Fatura oluşturma", "Fatura"),
         new(InvoiceApprove, "Fatura onaylama", "Fatura"),
         new(InvoiceSign, "Fatura imzalama", "Fatura"),
@@ -88,6 +91,7 @@ public static class Policies
         new(IntegrationManage, "Entegrasyonlar (e-ticaret, WHMCS, WiseCP, webhook)", "Ayarlar"),
         new(MessagingManage, "E-posta / SMS ayarları ve şablonları", "Ayarlar"),
         new(SecurityManage, "Güvenlik politikası", "Ayarlar"),
+        new(IpAccessManage, "IP erişim kuralları", "Ayarlar"),
         new(SystemRead, "Sistem durumu", "Ayarlar"),
         new(AuditRead, "Denetim izi", "Denetim"),
         new(ComplianceManage, "Mevzuat kaynak izleme", "Denetim"),
@@ -98,19 +102,25 @@ public static class Policies
     public static IReadOnlyDictionary<string, string[]> Map { get; } = new Dictionary<string, string[]>
     {
         [ApiKeyManage] = [Roles.TenantOwner],
-        [AuditRead] = [Roles.TenantOwner, Roles.CompanyAdmin, Roles.SecurityOfficer, Roles.ComplianceOfficer, Roles.ArchiveAuditor, Roles.ReadOnlyAuditor],
+        [AuditRead] = [Roles.PlatformSuperAdmin, Roles.TenantOwner, Roles.CompanyAdmin, Roles.SecurityOfficer, Roles.ComplianceOfficer, Roles.ArchiveAuditor, Roles.ReadOnlyAuditor],
         [CatalogManage] = [Roles.TenantOwner, Roles.CompanyAdmin, Roles.AccountingManager, Roles.Accountant, Roles.InvoiceCreator, Roles.ApiClient],
         [CompanyManage] = [Roles.TenantOwner, Roles.CompanyAdmin],
         [ComplianceManage] = [Roles.TenantOwner, Roles.ComplianceOfficer],
         [GibPortal] = [Roles.TenantOwner, Roles.AccountingManager, Roles.InvoiceSigner],
         [IncomingManage] = [Roles.TenantOwner, Roles.AccountingManager, Roles.Accountant, Roles.ApiClient],
         [IntegrationManage] = [Roles.TenantOwner, Roles.CompanyAdmin, Roles.IntegratorManager],
-        [InvoiceApprove] = [Roles.TenantOwner, Roles.AccountingManager, Roles.InvoiceApprover],
+        [IpAccessManage] = [Roles.PlatformSuperAdmin, Roles.TenantOwner],
+        [InvoiceApprove] = [Roles.PlatformSuperAdmin, Roles.TenantOwner, Roles.AccountingManager, Roles.InvoiceApprover],
         [InvoiceCancel] = [Roles.TenantOwner, Roles.CompanyAdmin, Roles.AccountingManager],
         [InvoiceCreate] = [Roles.TenantOwner, Roles.AccountingManager, Roles.Accountant, Roles.InvoiceCreator, Roles.ApiClient],
+        [InvoiceFullDocument] =
+        [
+            Roles.TenantOwner, Roles.CompanyAdmin, Roles.AccountingManager, Roles.Accountant,
+            Roles.InvoiceCreator, Roles.InvoiceApprover, Roles.InvoiceSigner, Roles.ApiClient,
+        ],
         [InvoiceRead] =
         [
-            Roles.TenantOwner, Roles.CompanyAdmin, Roles.AccountingManager, Roles.SecurityOfficer, Roles.ComplianceOfficer, Roles.InvoiceApprover,
+            Roles.PlatformSuperAdmin, Roles.TenantOwner, Roles.CompanyAdmin, Roles.AccountingManager, Roles.SecurityOfficer, Roles.ComplianceOfficer, Roles.InvoiceApprover,
             Roles.InvoiceSigner, Roles.IntegratorManager, Roles.Accountant, Roles.InvoiceCreator, Roles.ArchiveAuditor, Roles.ReadOnlyAuditor, Roles.ApiClient,
         ],
         [InvoiceSign] = [Roles.TenantOwner, Roles.InvoiceSigner],

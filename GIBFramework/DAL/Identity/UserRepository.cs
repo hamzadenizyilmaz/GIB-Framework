@@ -18,7 +18,7 @@ public interface IUserRepository
 
     Task UpdateAsync(UserAccount user, CancellationToken cancellationToken);
 
-    Task<Guid?> GetSecurityStampAsync(string userCode, CancellationToken cancellationToken);
+    Task<Guid?> GetSecurityStampAsync(string userCode, CancellationToken cancellationToken, string? excludedTenantTaxId = null);
 }
 
 public sealed class UserRepository(SqlConnectionFactory connections) : IUserRepository
@@ -90,14 +90,15 @@ public sealed class UserRepository(SqlConnectionFactory connections) : IUserRepo
             ?? throw new ConflictException("USER_CONCURRENCY", "Kullanıcı bilgileri değişti. İşlemi yeniden deneyin.");
     }
 
-    public async Task<Guid?> GetSecurityStampAsync(string userCode, CancellationToken cancellationToken)
+    public async Task<Guid?> GetSecurityStampAsync(string userCode, CancellationToken cancellationToken, string? excludedTenantTaxId = null)
     {
         await using var conn = await connections.OpenSystemAsync(cancellationToken);
         await using var cmd = conn.Command("""
             SELECT u.SecurityStamp FROM dbo.Users u LEFT JOIN dbo.Tenants t ON t.Id = u.TenantId
-            WHERE u.UserCode = @c AND u.IsActive = 1 AND (u.TenantId IS NULL OR t.IsActive = 1)
+            WHERE u.UserCode = @c AND u.IsActive = 1
+              AND (u.TenantId IS NULL OR (t.IsActive = 1 AND (@excluded IS NULL OR t.TaxId <> @excluded)))
             """);
-        return (Guid?)await cmd.With("@c", Normalize(userCode)).ExecuteScalarAsync(cancellationToken);
+        return (Guid?)await cmd.With("@c", Normalize(userCode)).With("@excluded", excludedTenantTaxId).ExecuteScalarAsync(cancellationToken);
     }
 
     public static string Normalize(string userCode) => (userCode ?? string.Empty).Trim().ToLowerInvariant();

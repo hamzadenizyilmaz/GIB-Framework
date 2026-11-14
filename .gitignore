@@ -5,6 +5,8 @@
 
 # dotenv files
 .env
+.env.*
+!.env.example
 
 # User-specific files
 *.rsuser
@@ -273,6 +275,9 @@ ServiceFabricBackup/
 *.mdf
 *.ldf
 *.ndf
+*.bak
+*.bacpac
+*.dacpac
 
 # Business Intelligence projects
 *.rdl.data
@@ -486,6 +491,8 @@ $RECYCLE.BIN/
 /GIBFramework/logs/
 *.pfx
 *.p12
+*.key
+secrets.json
 appsettings.*.local.json
 
 # Resmi GIB dosyalari (tools ile indirilir, depoya konmaz) ve Data Protection anahtarlari

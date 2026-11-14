@@ -165,6 +165,7 @@ public sealed class GibPortalService(
         var day = invoice.IssueDate;
         var stages = await vault.ListAsync(invoice.TenantId, invoice.Id, ct);
         var latest = stages.LastOrDefault(stage => stage.Stage is "gib-portal-draft-requested" or "gib-portal-draft-deleted");
+        Guid? returnedEttn = null;
         PortalDraftAttempt attempt;
         if (latest is { Stage: "gib-portal-draft-requested" })
         {
@@ -175,6 +176,12 @@ public sealed class GibPortalService(
             {
                 throw new ConflictException("GIB_PORTAL_DRAFT_RECONCILIATION", "Önceki GİB taslak isteğini aynı portal hesabı ve ortamda doğrulayın.");
             }
+            var receipt = stages.LastOrDefault(stage => stage.Sequence > latest.Sequence && stage.Stage == "gib-portal-draft-receipt");
+            if (receipt is not null && await vault.ReadAsync(invoice.TenantId, invoice.Id, receipt.Sequence, "ettn.txt", ct) is { } proof
+                && Guid.TryParse(Encoding.UTF8.GetString(proof), out var recorded))
+            {
+                returnedEttn = recorded;
+            }
         }
         else
         {
@@ -183,10 +190,17 @@ public sealed class GibPortalService(
             await vault.StoreAsync(invoice.TenantId, invoice.Id, day.Year, "gib-portal-draft-requested",
                 [new EvidenceItem("attempt.json", "application/json", JsonDefaults.SerializeToUtf8(attempt, indented: false))],
                 RetentionClass.SpecialIntegratorLog, ct);
-            await Call(session, () => client.CreateDraftAsync(session.Environment, token, draft, ct));
+            returnedEttn = await Call(session, () => client.CreateDraftAsync(session.Environment, token, draft, ct));
+            if (returnedEttn is { } received)
+            {
+                using var evidenceDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                await vault.StoreAsync(invoice.TenantId, invoice.Id, day.Year, "gib-portal-draft-receipt",
+                    [new EvidenceItem("ettn.txt", "text/plain", Encoding.UTF8.GetBytes(received.ToString("D")))],
+                    RetentionClass.SpecialIntegratorLog, evidenceDeadline.Token);
+            }
         }
 
-        var known = attempt.Before.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var known = attempt.Before.Select(value => Guid.TryParse(value, out var id) ? id : Guid.Empty).ToHashSet();
         GibPortalDocumentRow? created = null;
         for (var poll = 0; poll < 4 && created is null; poll++)
         {
@@ -196,8 +210,12 @@ public sealed class GibPortalService(
             }
 
             var matches = (await Call(session, () => client.ListDraftsAsync(session.Environment, token, day, day, ct)))
-                .Where(r => !known.Contains(r.Ettn) && r.RecipientTaxId == invoice.Customer.TaxId
-                    && (r.DocumentDate is null || r.DocumentDate == GibPortalClient.PortalDate(day))).Take(2).ToList();
+                .Where(r => Guid.TryParse(r.Ettn, out var actual) && actual != Guid.Empty && !known.Contains(actual) && r.IsDated(day)
+                    && (returnedEttn is { } expected
+                        ? expected == actual
+                            && (r.RecipientTaxId is null || r.RecipientTaxId == invoice.Customer.TaxId)
+                        : r.RecipientTaxId == invoice.Customer.TaxId))
+                .Take(2).ToList();
             if (matches.Count > 1)
             {
                 throw new ConflictException("GIB_PORTAL_DRAFT_RECONCILIATION", "GİB portalında birden fazla taslak eşleşti. Kayıtları kontrol edin.");
@@ -207,7 +225,7 @@ public sealed class GibPortalService(
 
         if (created is null || !Guid.TryParse(created.Ettn, out var ettn))
         {
-            throw new ConflictException("GIB_PORTAL_DRAFT_RECONCILIATION", "GİB taslak isteği bekliyor. Düzenlenen Belgeler ekranını kontrol edin.");
+            throw new ConflictException("GIB_PORTAL_DRAFT_RECONCILIATION", "GİB henüz bu faturaya ait taslağı listelemedi. Aynı portal hesabıyla taslak durumunu tekrar kontrol edin.");
         }
         await vault.StoreAsync(invoice.TenantId, invoice.Id, invoice.IssueDate.Year, "gib-portal-draft",
             [
@@ -408,11 +426,12 @@ public sealed class GibPortalService(
         var signedManifest = (await vault.ListAsync(invoice.TenantId, invoice.Id, ct)).LastOrDefault(m => m.Stage == "signed");
         if (signedManifest is not null && await vault.ReadAsync(invoice.TenantId, invoice.Id, signedManifest.Sequence, "invoice.html", ct) is { } stored)
         {
-            return Encoding.UTF8.GetString(stored);
+            return Messaging.InvoiceDocumentService.DecodeProviderHtml(stored);
         }
 
         var (session, token) = RequireSession();
-        return await Call(session, () => client.GetHtmlAsync(session.Environment, token, invoice.Uuid.ToString("D"), approved: false, ct));
+        return await Call(session, () => client.GetHtmlAsync(session.Environment, token, invoice.Uuid.ToString("D"),
+            approved: invoice.DocumentNumber is not null, ct));
     }
 
     public async Task<Invoice> DeleteDraftAsync(Guid invoiceId, string reason, CancellationToken ct)
@@ -532,7 +551,8 @@ public sealed class GibPortalService(
         using var archive = new ZipArchive(new MemoryStream(zip), ZipArchiveMode.Read);
         byte[]? Read(string extension)
         {
-            var entry = archive.Entries.FirstOrDefault(e => e.Name.EndsWith(extension, StringComparison.OrdinalIgnoreCase) && e.Length < 20 * 1024 * 1024);
+            const int maxBytes = 20 * 1024 * 1024;
+            var entry = archive.Entries.FirstOrDefault(e => e.Name.EndsWith(extension, StringComparison.OrdinalIgnoreCase));
             if (entry is null)
             {
                 return null;
@@ -540,7 +560,14 @@ public sealed class GibPortalService(
 
             using var stream = entry.Open();
             using var buffer = new MemoryStream();
-            stream.CopyTo(buffer);
+            if (entry.Length > maxBytes) throw new InvalidDataException("Portal arşiv kaydı boyut sınırını aştı.");
+            var chunk = new byte[81920];
+            int count;
+            while ((count = stream.Read(chunk)) > 0)
+            {
+                if (buffer.Length + count > maxBytes) throw new InvalidDataException("Portal arşiv kaydı boyut sınırını aştı.");
+                buffer.Write(chunk, 0, count);
+            }
             return buffer.ToArray();
         }
 

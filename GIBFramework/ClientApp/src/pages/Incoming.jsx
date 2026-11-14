@@ -12,7 +12,7 @@ export function Incoming() {
   const toast = useToast();
   const fileRef = useRef(null);
   const [result, setResult] = useState(null);
-  const { data: rows, loading, reload } = useLoad(() => api.get('/api/v1/incoming-invoices?take=200'), []);
+  const { data: rows, loading, error, reload } = useLoad(() => api.get('/api/v1/incoming-invoices?take=200'), []);
 
   const upload = async () => {
     const file = fileRef.current.files[0];
@@ -32,7 +32,7 @@ export function Incoming() {
 
   return (
     <>
-      <PageHeader icon="inbox" title="Gelen faturalar" />
+      <PageHeader icon="inbox" title="Gelen faturalar" subtitle="UBL-TR belgelerini yükleyin, doğrulayın ve gelen kayıtları inceleyin." />
       <Card title="Fatura yükle" icon="upload" className="mb-4">
         <div className="row g-2 align-items-end">
           <div className="col-md-8">
@@ -54,8 +54,8 @@ export function Incoming() {
           ))}
       </Card>
 
-      <Card title="Gelen kutusu" icon="inbox" bodyClass="">
-        {loading ? <div className="px-3"><Spinner /></div> : rows?.length ? (
+      <Card title="Gelen kutusu" icon="inbox" bodyClass="invoice-table-body">
+        {loading ? <div className="px-3"><Spinner /></div> : error ? <><ErrorAlert error={error} /><BusyButton onClick={reload}>Tekrar dene</BusyButton></> : rows?.length ? (
           <div className="table-responsive">
             <table className="table align-middle mb-0">
               <thead><tr><th>Belge no</th><th>Tarih</th><th>Satıcı</th><th className="num">Tutar</th><th>İmza</th><th>Durum</th><th /></tr></thead>

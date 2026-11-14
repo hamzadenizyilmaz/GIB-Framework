@@ -60,6 +60,14 @@ public sealed class InvoiceParty
 
     public string? Phone { get; set; }
 
+    public string? Fax { get; set; }
+
+    public string? Website { get; set; }
+
+    public string? TradeRegistryNumber { get; set; }
+
+    public string? MersisNumber { get; set; }
+
     public string? Alias { get; set; }
 
     public bool IsEFaturaRegistered { get; set; }
@@ -85,6 +93,8 @@ public sealed class InvoiceParty
 public sealed class InvoiceLine
 {
     public int LineNo { get; set; }
+
+    public string? ProductCode { get; set; }
 
     public string Name { get; set; } = string.Empty;
 
