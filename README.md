@@ -32,6 +32,15 @@ Gelir İdaresi Başkanlığı e-Fatura ve e-Arşiv süreçleri için çok amaçl
 
 </div>
 
+> [!WARNING]
+> ### ⚠️ Önemli Uyarı — Geliştirme ve Kullanım Koşulları
+>
+> **GIB Framework bağımsız bir yazılım projesidir; Gelir İdaresi Başkanlığı'nın (GİB) resmî yazılımı değildir ve herhangi bir resmî onay veya destek iddiası taşımaz.**
+>
+> Proje geliştirme ve doğrulama çalışmaları kapsamında sunulmaktadır. Belgelenen özellikler, güvenlik mekanizmaları ve GİB entegrasyonları tek başına üretim ortamına uygunluk garantisi oluşturmaz. **Gerekli güvenlik testleri, güncel mevzuat kontrolleri, entegrasyon yetkilendirmeleri ve uçtan uca doğrulamalar tamamlanmadan gerçek mükellef verileriyle veya canlı e-Fatura/e-Arşiv işlemlerinde kullanmayın.**
+>
+> Demo hesapları ve örnek kimlik bilgileri yalnızca test içindir; canlı ortamlarda kullanılmamalıdır. Kullanım öncesinde [kurulum](install.md), [güvenlik](SECURITY.md) ve lisans bilgilerini inceleyin.
+
 ## İçindekiler
 
 1. [Genel bakış](#genel-bakış)
