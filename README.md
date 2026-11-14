@@ -23,6 +23,7 @@ Gelir İdaresi Başkanlığı e-Fatura ve e-Arşiv süreçleri için çok amaçl
 ![React](https://img.shields.io/badge/React-19-149ECA?logo=react&logoColor=white)
 ![SQL Server](https://img.shields.io/badge/SQL%20Server-2019%2B-CC2927?logo=microsoftsqlserver&logoColor=white)
 ![Sürüm](https://img.shields.io/badge/s%C3%BCr%C3%BCm-6.0.0-0778E6)
+[![Architecture diagram](https://gitdiagram.com/diagram-badge.svg)](https://gitdiagram.com/hamzadenizyilmaz/gib-framework?utm_source=readme&utm_medium=badge)
 ![Uyarı](https://img.shields.io/badge/canl%C4%B1%20kullan%C4%B1m-%C3%B6n%20do%C4%9Frulama%20gerekir-C0392B)
 
 [Proje sitesi](https://framework.hamzadenizyilmaz.com.tr) &nbsp;|&nbsp;
