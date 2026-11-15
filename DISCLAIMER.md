@@ -123,5 +123,3 @@ Bu beyan yalnızca genel bilgilendirme ve risk açıklaması amacı taşır; tek
 **GIB Framework resmî bir GİB yazılımı değildir.** Yazılım, **GPL-3.0 kapsamında ve garanti verilmeksizin** sunulur. Canlı kullanıma geçmeden önce mevzuat, güvenlik, veri koruma, imza, entegrasyon ve fatura işlemleri bağımsız olarak doğrulanmalıdır. Uygulanabilir hukuk çerçevesinde, kendi kullanım ve işletim kararlarından doğan yükümlülükler ilgili kullanıcılara ve işletmecilere aittir.
 
 **İlgili belgeler:** [README.md](./README.md) · [LICENSE](./LICENSE) · [SECURITY.md](./SECURITY.md) · [install.md](./install.md)
-
-> **Hukuki not:** Bu metin genel amaçlı bir taslaktır. Kamuya açık yayımlama ve özellikle ticari/canlı kullanım öncesinde Türkiye'de bilişim, sözleşme ve vergi hukuku alanında yetkin bir hukukçunun incelemesi önerilir.
