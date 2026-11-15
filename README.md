@@ -425,6 +425,17 @@ GIBFramework/
   ClientApp/        React panel
 database/           SQL kurulum scriptleri
 ```
+## Sorumluluk Reddi Beyanı
+
+**GIB Framework**, T.C. Gelir İdaresi Başkanlığı (GİB) tarafından geliştirilmiş, onaylanmış veya resmî olarak desteklenen bir yazılım değildir.
+
+Yazılım, GNU GPL v3 lisansı kapsamında **“OLDUĞU GİBİ” (AS IS)** ve herhangi bir garanti verilmeksizin sunulmaktadır.
+
+Projenin e-Fatura, e-Arşiv, GİB portalı, REST API ve üçüncü taraf entegrasyonlarıyla kullanımından doğabilecek teknik, mali, hukuki ve vergisel riskler hakkında ayrıntılı bilgi için aşağıdaki belgeyi okuyunuz.
+
+**[Sorumluluk Reddi Beyanı (DISCLAIMER.md)](./DISCLAIMER.md)**
+
+Canlı ortamda kullanımdan önce gerekli teknik ve mevzuatsal uygunluk kontrolleri yapılmalıdır.
 
 ## Lisans ve iletişim
 
