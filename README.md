@@ -4,7 +4,7 @@
   <a href="https://www.bilhost.com/panel/aff.php?aff=37">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="assets/branding/bilhost-logo-dark.svg">
-      <img src="assets/branding/bilhost-logo.svg" alt="Bilhost" width="16%" align="middle">
+      <img src="assets/branding/bilhost-logo.svg" alt="Bilhost" width="35%" align="middle">
     </picture>
   </a>
 </p>
