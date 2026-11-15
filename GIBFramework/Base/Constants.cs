@@ -53,6 +53,7 @@ public static class Policies
     public const string CatalogManage = nameof(CatalogManage);
     public const string CompanyManage = nameof(CompanyManage);
     public const string ComplianceManage = nameof(ComplianceManage);
+    public const string RuleApprove = nameof(RuleApprove);
     public const string GibPortal = nameof(GibPortal);
     public const string IncomingManage = nameof(IncomingManage);
     public const string IntegrationManage = nameof(IntegrationManage);
@@ -95,6 +96,7 @@ public static class Policies
         new(SystemRead, "Sistem durumu", "Ayarlar"),
         new(AuditRead, "Denetim izi", "Denetim"),
         new(ComplianceManage, "Mevzuat kaynak izleme", "Denetim"),
+        new(RuleApprove, "Mevzuat kurallarını inceleme ve onaylama (iki kişi)", "Denetim"),
         new(TaxOfficeManage, "Vergi dairesi listesi", "Denetim"),
         new(PlatformAdmin, "Platform yönetimi", "Platform"),
     ];
@@ -106,6 +108,7 @@ public static class Policies
         [CatalogManage] = [Roles.TenantOwner, Roles.CompanyAdmin, Roles.AccountingManager, Roles.Accountant, Roles.InvoiceCreator, Roles.ApiClient],
         [CompanyManage] = [Roles.TenantOwner, Roles.CompanyAdmin],
         [ComplianceManage] = [Roles.TenantOwner, Roles.ComplianceOfficer],
+        [RuleApprove] = [Roles.PlatformSuperAdmin, Roles.ComplianceOfficer],
         [GibPortal] = [Roles.TenantOwner, Roles.AccountingManager, Roles.InvoiceSigner],
         [IncomingManage] = [Roles.TenantOwner, Roles.AccountingManager, Roles.Accountant, Roles.ApiClient],
         [IntegrationManage] = [Roles.TenantOwner, Roles.CompanyAdmin, Roles.IntegratorManager],

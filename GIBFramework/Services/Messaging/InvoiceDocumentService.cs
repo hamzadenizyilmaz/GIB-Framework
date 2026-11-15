@@ -53,6 +53,8 @@ public sealed class InvoiceDocumentService(
 
     public (Guid TenantId, Guid InvoiceId)? ReadToken(string token)
     {
+        if (token.Length is <= 20 or >= 1000 || token.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('-' or '_')))
+            return null;
         try
         {
             var bytes = Protector.Unprotect(FromBase64Url(token), out _);

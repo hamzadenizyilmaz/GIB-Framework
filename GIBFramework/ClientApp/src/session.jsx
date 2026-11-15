@@ -10,17 +10,13 @@ export function SessionProvider({ children }) {
 
   const load = useCallback(async () => {
     const id = ++request.current;
-    const token = storage.token;
+    const version = storage.sessionVersion;
     const override = storage.tenantOverride;
-    const current = () => request.current === id && storage.token === token && storage.tenantOverride === override;
-    if (!token) {
-      setState(empty);
-      return null;
-    }
+    const current = () => request.current === id && storage.sessionVersion === version && storage.tenantOverride === override;
 
     setState({ ...empty, loading: true });
     try {
-      const permissions = await api.get('/api/v1/auth/permissions');
+      const permissions = await api.get('/api/v1/auth/permissions', { quietUnauthorized: true });
       if (!current()) return null;
       const tenant = (permissions.tenantId || override) && !permissions.mustChangePassword && !permissions.mfaRequired
         ? await api.get('/api/v1/tenants/current')
@@ -29,7 +25,10 @@ export function SessionProvider({ children }) {
       setState({ ...empty, permissions, tenant });
       return permissions;
     } catch (error) {
-      if (current()) setState({ ...empty, error });
+      if (current()) {
+        if (error.status === 401) storage.clear();
+        setState(error.status === 401 ? empty : { ...empty, error });
+      }
       return null;
     }
   }, []);
@@ -48,9 +47,13 @@ export function SessionProvider({ children }) {
   }, [load]);
 
   const logout = useCallback(async () => {
-    const token = storage.token;
-    try { await api.post('/api/v1/auth/logout'); } catch { }
-    if (storage.token !== token) return;
+    const version = storage.sessionVersion;
+    try {
+      await api.post('/api/v1/auth/logout', undefined, { quietUnauthorized: true });
+    } catch (error) {
+      if (error.status !== 401) throw error;
+    }
+    if (storage.sessionVersion !== version) return;
     ++request.current;
     storage.clear();
     setState(empty);
@@ -65,8 +68,7 @@ export function SessionProvider({ children }) {
       hasRole: (role) => !!p && p.roles.includes(role),
       async login(userCode, password, totpCode) {
         const result = await api.post('/api/v1/auth/login', { userCode, password, totpCode: totpCode || null });
-        storage.tenantOverride = null;
-        storage.token = result.accessToken;
+        storage.clear();
         await load();
         return result;
       },

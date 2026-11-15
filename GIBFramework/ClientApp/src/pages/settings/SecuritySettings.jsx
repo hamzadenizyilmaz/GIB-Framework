@@ -234,3 +234,83 @@ export function SecuritySettings() {
     </SettingsLayout>
   );
 }
+
+function HostList({ id, title, help, placeholder, hosts, onChange }) {
+  const [entry, setEntry] = useState('');
+  const [entryError, setEntryError] = useState('');
+  const add = (event) => {
+    event.preventDefault();
+    const value = entry.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/[/:].*$/, '').replace(/\.$/, '');
+    if (!value) return;
+    if (!/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9-]{2,63}$/.test(value)) {
+      setEntryError('Yalnızca sunucu adı yazın (ör. dash.ornek.com).');
+      return;
+    }
+    if (hosts.includes(value)) {
+      setEntryError('Bu sunucu zaten listede.');
+      return;
+    }
+    onChange([...hosts, value]);
+    setEntry('');
+    setEntryError('');
+  };
+  return (
+    <Card title={title}>
+      <p className="small text-body-secondary">{help}</p>
+      <form className="input-group mb-2" onSubmit={add}>
+        <input id={id} className="form-control font-monospace" value={entry} maxLength={253} placeholder={placeholder} aria-label={title}
+          onChange={(event) => { setEntry(event.target.value); setEntryError(''); }} />
+        <button type="submit" className="btn btn-outline-primary"><i className="bi bi-plus-lg" />Ekle</button>
+      </form>
+      {entryError && <p role="alert" className="text-danger small">{entryError}</p>}
+      <div className="table-responsive">
+        <table className="table align-middle mb-0">
+          <thead><tr><th>Sunucu adı</th><th className="text-end">İşlem</th></tr></thead>
+          <tbody>{hosts.length ? hosts.map((host) => <tr key={host}>
+            <td className="font-monospace">{host}</td>
+            <td className="text-end">
+              <button type="button" className="btn btn-sm btn-outline-danger" aria-label={`${host} sunucusunu kaldır`}
+                onClick={() => onChange(hosts.filter((value) => value !== host))}>Kaldır</button>
+            </td>
+          </tr>) : <tr><td colSpan={2} className="text-body-secondary">Henüz sunucu eklenmedi.</td></tr>}</tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+export function OutboundNetworkSettings() {
+  const toast = useToast();
+  const { data, loading, error, reload } = useLoad(() => api.get('/api/v1/settings/outbound-network'), []);
+  const [form, setForm] = useState(null);
+  useEffect(() => {
+    if (data) setForm({ webhookHosts: data.webhookHosts || [], smtpHosts: data.smtpHosts || [] });
+  }, [data]);
+  const save = async () => {
+    const result = await api.put('/api/v1/settings/outbound-network', form);
+    setForm({ webhookHosts: result.webhookHosts, smtpHosts: result.smtpHosts });
+    toast('Dış bağlantı izinleri kaydedildi.');
+  };
+  return <SettingsLayout icon="globe2" title="Dış bağlantı izinleri" parent={['Güvenlik politikası', '/settings/security']}
+    subtitle="Panelin bildirim (webhook) gönderebileceği ve e-posta için bağlanabileceği sunucular · site geneli"
+    actions={form && <BusyButton className="btn btn-primary" onClick={save}><i className="bi bi-save" />Kaydet</BusyButton>}>
+    <ErrorAlert error={error} />
+    {error && <BusyButton className="btn btn-outline-secondary" onClick={reload}>Tekrar dene</BusyButton>}
+    {loading && <Spinner />}
+    {form && <div className="row g-4">
+      <div className="col-xl-6">
+        <HostList id="webhook-host" title="Webhook sunucuları" placeholder="dash.ornek.com"
+          help="Entegrasyonlardaki “Bildirim adresi (webhook URL)” bu sunuculardan birine ait olmalıdır. Örn. WHMCS için WHMCS alan adınız."
+          hosts={form.webhookHosts} onChange={(webhookHosts) => setForm({ ...form, webhookHosts })} />
+      </div>
+      <div className="col-xl-6">
+        <HostList id="smtp-host" title="SMTP sunucuları" placeholder="smtp.yandex.com"
+          help="Firmaların E-posta (SMTP) ayarlarında seçebileceği gönderim sunucuları."
+          hosts={form.smtpHosts} onChange={(smtpHosts) => setForm({ ...form, smtpHosts })} />
+      </div>
+      <div className="col-12">
+        <p className="form-text mb-0">Değişiklikler kaydedildiği anda geçerli olur. Yalnızca tam sunucu adı eşleşir (alt alan adları ayrıca eklenmelidir). Sunucu yerel/özel IP'ye çözümleniyorsa bağlantı yine reddedilir.</p>
+      </div>
+    </div>}
+  </SettingsLayout>;
+}

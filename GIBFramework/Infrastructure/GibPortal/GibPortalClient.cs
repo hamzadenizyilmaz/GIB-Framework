@@ -39,11 +39,31 @@ public sealed class GibPortalClient(IHttpClientFactory httpFactory, GibPortalOpt
 
     private static readonly JsonSerializerOptions PortalJson = new()
     {
-        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
     public Uri BaseUri(GibPortalEnvironment environment) =>
-        new(environment == GibPortalEnvironment.Production ? options.ProductionBaseUrl : options.TestBaseUrl);
+        environment == GibPortalEnvironment.Production
+            ? ValidateEndpoint(options.ProductionBaseUrl, "earsivportal.efatura.gov.tr")
+            : ValidateEndpoint(options.TestBaseUrl, "earsivportaltest.efatura.gov.tr");
+
+    internal static void ValidateEndpoints(GibPortalOptions options)
+    {
+        ValidateEndpoint(options.ProductionBaseUrl, "earsivportal.efatura.gov.tr");
+        ValidateEndpoint(options.TestBaseUrl, "earsivportaltest.efatura.gov.tr");
+        if (options.RequestTimeoutSeconds is < 1 or > 120)
+            throw new InvalidOperationException("GibPortal:RequestTimeoutSeconds 1 ile 120 arasında olmalıdır.");
+    }
+
+    private static Uri ValidateEndpoint(string url, string expectedHost)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps
+            || !uri.IdnHost.Equals(expectedHost, StringComparison.OrdinalIgnoreCase) || !uri.IsDefaultPort
+            || uri.UserInfo.Length != 0 || uri.AbsolutePath != "/" || uri.Query.Length != 0 || uri.Fragment.Length != 0)
+        {
+            throw new InvalidOperationException($"GİB portalı adresi HTTPS üzerinden {expectedHost} olmalıdır.");
+        }
+        return uri;
+    }
 
     public async Task<string> LoginAsync(GibPortalEnvironment environment, string userCode, string password, CancellationToken ct)
     {
@@ -247,7 +267,7 @@ public sealed class GibPortalClient(IHttpClientFactory httpFactory, GibPortalOpt
 
     public async Task<byte[]> DownloadZipAsync(GibPortalEnvironment env, string token, string ettn, CancellationToken ct)
     {
-        var client = Create(env);
+        using var client = Create(env);
         var url = $"{GibPortalProtocol.DownloadPath}?token={Uri.EscapeDataString(token)}&ettn={Uri.EscapeDataString(ettn)}&belgeTip=FATURA"
             + $"&onayDurumu={Uri.EscapeDataString(GibPortalProtocol.Approved)}&cmd={GibPortalProtocol.DownloadCommand}";
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -285,13 +305,14 @@ public sealed class GibPortalClient(IHttpClientFactory httpFactory, GibPortalOpt
         var client = httpFactory.CreateClient(HttpClientName);
         client.BaseAddress = BaseUri(environment);
         client.Timeout = TimeSpan.FromSeconds(options.RequestTimeoutSeconds);
+        client.MaxResponseContentBufferSize = 16 * 1024 * 1024;
         client.DefaultRequestHeaders.Referrer = new Uri(client.BaseAddress, GibPortalProtocol.RefererPath);
         return client;
     }
 
     private async Task<JsonElement> PostAsync(GibPortalEnvironment environment, string path, Dictionary<string, string> form, CancellationToken ct)
     {
-        var client = Create(environment);
+        using var client = Create(environment);
         using var content = new FormUrlEncodedContent(form);
         content.Headers.ContentType = new MediaTypeHeaderValue("application/x-www-form-urlencoded") { CharSet = "UTF-8" };
         HttpResponseMessage response;
@@ -299,18 +320,17 @@ public sealed class GibPortalClient(IHttpClientFactory httpFactory, GibPortalOpt
         try
         {
             response = await client.PostAsync(path, content, ct);
-            body = await response.Content.ReadAsStringAsync(ct);
+            using (response)
+                body = await response.Content.ReadAsStringAsync(ct);
         }
-        catch (HttpRequestException ex)
+        catch (HttpRequestException)
         {
-            throw new GibPortalException($"GİB portalına ulaşılamadı ({client.BaseAddress?.Host}): {ex.Message}");
+            throw new GibPortalException($"GİB portalına ulaşılamadı veya güvenli yanıt alınamadı ({client.BaseAddress?.Host}).");
         }
         catch (TaskCanceledException) when (!ct.IsCancellationRequested)
         {
             throw new GibPortalException($"GİB portalı {options.RequestTimeoutSeconds} saniyede yanıt vermedi ({client.BaseAddress?.Host}).");
         }
-
-        using var _ = response;
 
         JsonDocument doc;
         try

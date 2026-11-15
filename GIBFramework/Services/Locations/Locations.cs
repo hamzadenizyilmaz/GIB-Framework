@@ -42,8 +42,11 @@ public sealed class TkgmClient(IHttpClientFactory httpFactory, LocationOptions o
 
     private async Task<IReadOnlyList<LocationItem>> GetAsync(string path, CancellationToken ct)
     {
-        var client = httpFactory.CreateClient(HttpClientName);
-        client.BaseAddress = new Uri(options.TkgmBaseUrl.EndsWith('/') ? options.TkgmBaseUrl : options.TkgmBaseUrl + "/");
+        if (!Uri.TryCreate(options.TkgmBaseUrl.TrimEnd('/') + "/", UriKind.Absolute, out var uri)
+            || uri.Scheme != Uri.UriSchemeHttps || uri.UserInfo.Length != 0 || uri.Query.Length != 0 || uri.Fragment.Length != 0)
+            throw new ProviderUnavailableException("TKGM servisi HTTPS adresi gerektirir.");
+        using var client = httpFactory.CreateClient(HttpClientName);
+        client.BaseAddress = uri;
         client.Timeout = TimeSpan.FromSeconds(options.RequestTimeoutSeconds);
 
         HttpResponseMessage response;

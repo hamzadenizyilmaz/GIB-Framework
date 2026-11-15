@@ -10,7 +10,9 @@ export const ACCENTS = {
   orange: { label: 'Turuncu', color: '#e8590c', dark: '#c94c0a', rgb: '232, 89, 12' },
 };
 
-export const DEFAULT_APPEARANCE = { theme: 'auto', accent: 'forest', density: 'comfortable', width: 'wide' };
+export const FONT_SIZES = { sm: 14, md: 16, lg: 17, xl: 18 };
+
+export const DEFAULT_APPEARANCE = { theme: 'auto', accent: 'forest', density: 'comfortable', width: 'wide', fontSize: 'md', reduceMotion: false, contrast: false, stripes: true };
 
 export function readAppearance() {
   try {
@@ -43,6 +45,11 @@ export function applyAppearance(value = readAppearance()) {
   root.style.setProperty('--bs-link-hover-color', theme === 'dark' ? '#d7efe9' : accent.dark);
   root.classList.toggle('density-compact', value.density === 'compact');
   root.classList.toggle('layout-boxed', value.width === 'boxed');
+  // "Sıkı" yoğunluk kendi yazı boyutunu kullanır; kullanıcı ayrıca boyut seçtiyse o geçerlidir.
+  root.style.fontSize = value.fontSize === 'md' || !FONT_SIZES[value.fontSize] ? '' : `${FONT_SIZES[value.fontSize]}px`;
+  root.classList.toggle('reduce-motion', Boolean(value.reduceMotion));
+  root.classList.toggle('high-contrast', Boolean(value.contrast));
+  root.classList.toggle('no-stripes', value.stripes === false);
 }
 
 export function saveAppearance(value) {

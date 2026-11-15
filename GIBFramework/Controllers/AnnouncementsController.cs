@@ -19,6 +19,7 @@ public sealed class AnnouncementsController(
 {
     [HttpGet("active")]
     [AllowAnonymous]
+    [Microsoft.AspNetCore.RateLimiting.EnableRateLimiting(PublicInvoiceController.RateLimitPolicy)]
     [ResponseCache(NoStore = true)]
     public async Task<ActionResult<IReadOnlyList<Announcement>>> Active(CancellationToken ct)
     {
@@ -46,6 +47,7 @@ public sealed class AnnouncementsController(
     }
 
     [HttpPut("{id:guid}")]
+    [HttpPost("{id:guid}/update")]
     public async Task<ActionResult<Announcement>> Update(Guid id, [FromBody] AnnouncementRequest request, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -59,6 +61,7 @@ public sealed class AnnouncementsController(
     }
 
     [HttpDelete("{id:guid}")]
+    [HttpPost("{id:guid}/delete")]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
         if (!await announcements.DeleteAsync(id, ct))

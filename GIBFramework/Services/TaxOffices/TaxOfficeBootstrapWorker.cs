@@ -69,9 +69,11 @@ public sealed partial class TaxOfficeBootstrapWorker(
             return (await File.ReadAllBytesAsync(path, ct), Path.GetFileName(path));
         }
 
-        var client = httpFactory.CreateClient(HttpClientName);
+        if (!Uri.TryCreate(options.SourceUrl, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps || uri.UserInfo.Length != 0)
+            throw new InvalidOperationException("Vergi dairesi kaynağı HTTPS adresi gerektirir.");
+        using var client = httpFactory.CreateClient(HttpClientName);
         client.Timeout = TimeSpan.FromSeconds(120);
-        return (await client.GetByteArrayAsync(new Uri(options.SourceUrl), ct), "DefterdarlikVeVergiDaireleriListesi.pdf");
+        return (await client.GetByteArrayAsync(uri, ct), "DefterdarlikVeVergiDaireleriListesi.pdf");
     }
 
     private static partial class Log

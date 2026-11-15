@@ -58,11 +58,16 @@ public sealed class UserRepository(SqlConnectionFactory connections) : IUserRepo
     {
         ArgumentNullException.ThrowIfNull(user);
         await using var conn = user.TenantId is { } t ? await connections.OpenForTenantAsync(t, cancellationToken) : await connections.OpenSystemAsync(cancellationToken);
+        await InsertCoreAsync(user, conn, null, cancellationToken);
+    }
+
+    internal static async Task InsertCoreAsync(UserAccount user, SqlConnection conn, SqlTransaction? transaction, CancellationToken cancellationToken)
+    {
         await using var cmd = conn.Command("""
             INSERT dbo.Users (Id, TenantId, UserCode, DisplayName, Email, Phone, PasswordHash, RolesCsv, IsActive, MustChangePassword, FailedLoginCount,
                               LockoutUntil, TotpSecretProtected, TotpEnabled, TotpLastStep, SecurityStamp, CreatedAt, UpdatedAt, LastLoginAt)
             VALUES (@id, @t, @c, @n, @e, @ph, @h, @r, @a, @m, @f, @l, @ts, @te, @tl, @s, @ca, @ua, @ll)
-            """);
+            """, transaction);
         Bind(cmd, user);
         try
         {

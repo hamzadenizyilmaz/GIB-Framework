@@ -111,14 +111,16 @@ public sealed partial class LegalSourceWatcher(
     {
         var checks = services.GetRequiredService<ILegalSourceCheckRepository>();
         var audit = services.GetRequiredService<IAuditTrail>();
-        var client = http.CreateClient(nameof(LegalSourceWatcher));
+        using var client = http.CreateClient(nameof(LegalSourceWatcher));
 
         foreach (var source in rules.Sources.Where(s => s.Uri is not null))
         {
             var previous = await checks.GetLastHashAsync(source.Code, ct) ?? source.Sha256;
             try
             {
-                using var response = await client.GetAsync(source.Uri, ct);
+                if (source.Uri is not { IsAbsoluteUri: true } uri || uri.Scheme != Uri.UriSchemeHttps || uri.UserInfo.Length != 0)
+                    throw new HttpRequestException("Mevzuat kaynağı HTTPS adresi gerektirir.");
+                using var response = await client.GetAsync(uri, ct);
                 var bytes = response.IsSuccessStatusCode ? await response.Content.ReadAsByteArrayAsync(ct) : null;
                 var hash = bytes is null ? null : Hashing.Sha256Hex(bytes);
                 var changed = hash is not null && previous is not null && !string.Equals(hash, previous, StringComparison.OrdinalIgnoreCase);
@@ -131,7 +133,7 @@ public sealed partial class LegalSourceWatcher(
                         new AuditEntry("LEGAL_SOURCE_CHANGED", "LegalSource", source.Code, "Success", new { previous, current = hash, source.Uri }), null, ct);
                 }
             }
-            catch (HttpRequestException ex)
+            catch (Exception ex) when (ex is HttpRequestException || (ex is OperationCanceledException && !ct.IsCancellationRequested))
             {
                 await checks.InsertAsync(new LegalSourceCheck(0, source.Code, source.Uri!.ToString(), clock.UtcNow, null, null, previous, false, ex.Message), ct);
             }

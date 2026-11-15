@@ -65,6 +65,9 @@ public sealed partial class IntegrationService(
     public const string SignatureHeader = "X-GibFramework-Signature";
     public const string AnonymousConsumer = TaxIdentifier.AnonymousConsumer;
 
+    /// <summary>Panel tarafındaki yapılandırma hataları (ör. izinsiz hedef) kayıtlarda olduğu gibi gösterilir.</summary>
+    private const string ConfigErrorPrefix = "Yapılandırma: ";
+
     private static readonly TimeSpan[] Backoff =
     [
         TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(30), TimeSpan.FromHours(2), TimeSpan.FromHours(6), TimeSpan.FromHours(12),
@@ -143,11 +146,11 @@ public sealed partial class IntegrationService(
         var (file, code) = integration.Kind switch
         {
             IntegrationKind.Whmcs => ("gibframework.php", HookCode.Whmcs(url, secret ?? string.Empty, integration.Setting("taxIdField") ?? "TC Kimlik / Vergi No")),
-            IntegrationKind.WiseCp => ("gibframework.php", HookCode.WiseCp(url, secret ?? string.Empty)),
+            IntegrationKind.WiseCp => ("hooks.php", HookCode.WiseCp(url, secret ?? string.Empty)),
             IntegrationKind.Webhook => ("ornek-istek.sh", HookCode.Curl(url, secret ?? string.Empty)),
             _ => ((string?)null, (string?)null),
         };
-        return new IntegrationSetup(url, info.SignatureHeader, secret, file, code, info.Steps);
+        return new IntegrationSetup(url, info.Inbound ? info.SignatureHeader : SignatureHeader, secret, file, code, info.Steps);
     }
 
     public async Task<IReadOnlyList<IntegrationDelivery>> DeliveriesAsync(Guid id, CancellationToken ct)
@@ -203,17 +206,24 @@ public sealed partial class IntegrationService(
     {
         delivery.RequestBody = null;
         delivery.ResponseBody = null;
-        if (delivery.Error is not null && delivery.EventType is not ("marketplace.import" or "marketplace.micro-export"))
+        if (delivery.Error is not null && delivery.EventType is not ("marketplace.import" or "marketplace.micro-export")
+            && !delivery.Error.StartsWith(ConfigErrorPrefix, StringComparison.Ordinal))
             delivery.Error = delivery.HttpStatus is { } status ? $"HTTP {status}. Teslimat durumunu kontrol edin." : "Teslimat durumunu kontrol edin.";
         return delivery;
     }
 
-    public async Task<InboundResult> ReceiveAsync(Guid id, byte[] body, IHeaderDictionary headers, CancellationToken ct)
+    public async Task<InboundResult> ReceiveAsync(Guid id, Stream input, long? contentLength, IHeaderDictionary headers, CancellationToken ct)
     {
-        ArgumentNullException.ThrowIfNull(body);
+        ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(headers);
+        const int pingLimit = 64;
+        var signed = headers.ContainsKey(SignatureHeader) || headers.ContainsKey("X-WC-Webhook-Signature")
+            || headers.ContainsKey("X-Shopify-Hmac-Sha256");
+        if (!signed && contentLength > pingLimit)
+            return new InboundResult(StatusCodes.Status401Unauthorized, new { error = "İmza doğrulanamadı." });
+
         var integration = await repository.GetAsync(id, null, ct);
-        if (integration is null || !integration.IsActive)
+        if (integration is null || !integration.IsActive || !IntegrationCatalog.Get(integration.Kind).Inbound)
         {
             return new InboundResult(StatusCodes.Status404NotFound, new { error = "Entegrasyon bulunamadı veya kapalı." });
         }
@@ -244,20 +254,38 @@ public sealed partial class IntegrationService(
             return new InboundResult(code, response);
         }
 
-        if (integration.Kind == IntegrationKind.WooCommerce && body.Length <= 64
-            && Encoding.UTF8.GetString(body) is var ping && ping.StartsWith("webhook_id=", StringComparison.Ordinal)
-            && long.TryParse(ping.AsSpan("webhook_id=".Length), System.Globalization.NumberStyles.None,
-                System.Globalization.CultureInfo.InvariantCulture, out var webhookId) && webhookId > 0)
+        var signature = headers[SignatureName(integration.Kind)];
+        if (signature.Count != 1 || !HasSignatureFormat(integration.Kind, signature[0]?.Trim()))
         {
-            log.EventType = "ping";
-            return await Finish(DeliveryStatus.Ignored, 200, new { ok = true, message = "WooCommerce ping alındı." });
+            // WooCommerce can send a small, unsigned activation ping.
+            if (integration.Kind == IntegrationKind.WooCommerce && !signed && !(contentLength > pingLimit))
+            {
+                var ping = new byte[pingLimit + 1];
+                var length = await input.ReadAtLeastAsync(ping, ping.Length, false, ct);
+                const string prefix = "webhook_id=";
+                if (length <= pingLimit && Encoding.UTF8.GetString(ping, 0, length) is var value
+                    && value.StartsWith(prefix, StringComparison.Ordinal)
+                    && long.TryParse(value.AsSpan(prefix.Length), System.Globalization.NumberStyles.None,
+                        System.Globalization.CultureInfo.InvariantCulture, out var webhookId) && webhookId > 0)
+                {
+                    log.EventType = "ping";
+                    return await Finish(DeliveryStatus.Ignored, 200, new { ok = true, message = "WooCommerce ping alındı." });
+                }
+            }
+            return new InboundResult(StatusCodes.Status401Unauthorized, new { error = "İmza doğrulanamadı." });
         }
 
         var secret = Secrets(integration).GetValueOrDefault(IntegrationCatalog.SigningSecret);
-        if (string.IsNullOrEmpty(secret) || !VerifySignature(integration.Kind, secret, body, headers))
-        {
-            return await Finish(DeliveryStatus.Failed, 401, new { error = "İmza doğrulanamadı." }, "İmza doğrulanamadı.");
-        }
+        if (string.IsNullOrEmpty(secret))
+            return new InboundResult(StatusCodes.Status401Unauthorized, new { error = "İmza doğrulanamadı." });
+        using var buffer = new MemoryStream();
+        await input.CopyToAsync(buffer, ct);
+        var body = buffer.GetBuffer().AsMemory(0, checked((int)buffer.Length));
+        if (!VerifySignature(integration.Kind, secret, body.Span, headers))
+            return new InboundResult(StatusCodes.Status401Unauthorized, new { error = "İmza doğrulanamadı." });
+        if (integration.Kind == IntegrationKind.Shopify && integration.Setting("shopDomain") is { } shop
+            && !string.Equals(shop, headers["X-Shopify-Shop-Domain"].ToString(), StringComparison.OrdinalIgnoreCase))
+            return await Finish(DeliveryStatus.Failed, 403, new { error = "Shopify mağazası entegrasyonla eşleşmiyor." }, "Mağaza eşleşmedi.");
 
         log.EventType = OutboxEventRepository.Truncate(headers["X-WC-Webhook-Topic"].FirstOrDefault() ?? headers["X-Shopify-Topic"].FirstOrDefault() ?? "order", 100);
         MapResult mapped;
@@ -445,7 +473,6 @@ public sealed partial class IntegrationService(
 
     private async Task<ImportResult> ImportAsync(Integration integration, InboundOrder order, CancellationToken ct)
     {
-        var now = clock.UtcNow;
         if (order.Lines.Count == 0)
         {
             return new ImportResult(DeliveryStatus.Failed, 422, new { error = "Siparişte satır yok." }, "Siparişte satır yok.", null);
@@ -482,8 +509,8 @@ public sealed partial class IntegrationService(
             var (invoice, created) = await invoices.CreateDraftAsync(draft, key, ct,
                 new CustomerCardOptions(
                     (integration.Flag(IntegrationCatalog.SaveCustomer) || integration.Setting(IntegrationCatalog.SaveCustomer) is null) && draft.Customer.TaxId != AnonymousConsumer,
-                    null));
-            await repository.LinkOrderAsync(integration.Id, externalId, integration.TenantId, invoice.Id, now, ct);
+                    order.Customer.EFaturaRegistered is true && draft.Customer.TaxId != AnonymousConsumer ? true : null),
+                new InvoiceOrderLink(integration.Id, externalId, order.ExpectedTotal));
             string? warning = null;
             if (created && (integration.Flag(IntegrationCatalog.AutoSubmit) || integration.Setting(IntegrationCatalog.AutoSubmit) is null))
             {
@@ -537,15 +564,18 @@ public sealed partial class IntegrationService(
         foreach (var integration in list)
         {
             var orderId = links.Where(l => l.IntegrationId == integration.Id).Select(l => l.ExternalId).FirstOrDefault();
+            if (IsHosting(integration.Kind) && orderId is null)
+                continue;
             if (integration.Setting(IntegrationCatalog.WebhookUrl) is not null && integration.Events.Contains(evt.EventType, StringComparer.Ordinal))
             {
                 await QueueAsync(integration, evt.EventType, JsonDefaults.Serialize(new
                 {
                     id = Guid.NewGuid(),
                     @event = evt.EventType,
+                    sequence = evt.Id,
                     createdAt = now,
                     tenantId = integration.TenantId,
-                    data = Payload(evt, orderId),
+                    data = Payload(evt, orderId, evt.PublicLink.Length > 0 ? documents.PublicLink(evt.Invoice.TenantId, evt.Invoice.Id, InvoiceDocumentService.ArchiveLinkLifetime) : null),
                 }), evt.Invoice.Id, orderId, now, evt.Id, ct);
             }
 
@@ -586,6 +616,8 @@ public sealed partial class IntegrationService(
 
     public static bool IsAnonymousConsumer(string taxId) => taxId == AnonymousConsumer;
 
+    private static bool IsHosting(IntegrationKind kind) => kind is IntegrationKind.Whmcs or IntegrationKind.WiseCp;
+
     private async Task DeliverAsync(IntegrationDelivery delivery, CancellationToken ct)
     {
         var integration = await repository.GetAsync(delivery.IntegrationId, delivery.TenantId, ct);
@@ -593,6 +625,11 @@ public sealed partial class IntegrationService(
         if (integration is null || !integration.IsActive)
         {
             await CompleteAsync(delivery, DeliveryStatus.Ignored, null, null, "Entegrasyon kapalı.", null);
+            return;
+        }
+        if (IsHosting(integration.Kind) && delivery.EventType != "ping" && delivery.ExternalId is null)
+        {
+            await CompleteAsync(delivery, DeliveryStatus.Ignored, null, null, "Fatura bu entegrasyondan gelmedi.", null);
             return;
         }
 
@@ -635,7 +672,8 @@ public sealed partial class IntegrationService(
             DateTimeOffset? retry = !permanent && delivery.Attempts < Backoff.Length ? now.Add(Backoff[Math.Clamp(delivery.Attempts - 1, 0, Backoff.Length - 1)]) : null;
             retryAfter ??= ex is MarketplaceException { RetryAfter: { } delay } ? now.Add(delay) : null;
             if (retry is { } next && retryAfter is { } after && after > next) retry = after;
-            var error = uncertain ? "Teslimat sonucu belirsiz. Yeniden göndermeden önce sağlayıcı kaydını doğrulayın."
+            var error = ex is InvalidOperationException or UriFormatException ? ConfigErrorPrefix + ex.Message
+                : uncertain ? "Teslimat sonucu belirsiz. Yeniden göndermeden önce sağlayıcı kaydını doğrulayın."
                 : status is { } code ? $"Teslimat HTTP {code} ile sonuçlandı." : "Teslimat gerçekleştirilemedi.";
             Log.DeliveryFailed(logger, delivery.Id, error);
             await CompleteAsync(delivery, retry is null ? DeliveryStatus.Failed : DeliveryStatus.Pending, status, response, error, retry);
@@ -665,7 +703,9 @@ public sealed partial class IntegrationService(
         var url = SafeUri(integration.Setting(IntegrationCatalog.WebhookUrl) ?? throw new InvalidOperationException("Bildirim adresi tanımlı değil."));
         var body = UnprotectPayload(integration, delivery.RequestBody) ?? "{}";
         var timestamp = clock.UtcNow.ToUnixTimeSeconds().ToString(System.Globalization.CultureInfo.InvariantCulture);
-        var secret = Secrets(integration).GetValueOrDefault(IntegrationCatalog.SigningSecret) ?? string.Empty;
+        var secret = Secrets(integration).GetValueOrDefault(IntegrationCatalog.SigningSecret);
+        if (string.IsNullOrEmpty(secret))
+            throw new InvalidOperationException("Bildirim imza anahtarı eksik. Entegrasyon ayarlarını yeniden kaydedin.");
         var request = new HttpRequestMessage(HttpMethod.Post, url) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
         request.Headers.Add("X-GibFramework-Event", delivery.EventType);
         request.Headers.Add("X-GibFramework-Delivery", delivery.Id.ToString());
@@ -711,7 +751,7 @@ public sealed partial class IntegrationService(
 
         if (!network.AllowsWebhook(uri.IdnHost))
         {
-            throw new InvalidOperationException("Bildirim sunucusu izin verilen hedefler arasında değil.");
+            throw new InvalidOperationException("Bildirim sunucusu izin verilen hedefler arasında değil. Platform yöneticisi Ayarlar › Güvenlik › Dış bağlantı izinleri sayfasına bu sunucu adını eklemelidir.");
         }
 
         return uri;
@@ -742,7 +782,7 @@ public sealed partial class IntegrationService(
             ? _deliveryProtector.CreateProtector(integration.TenantId.ToString("N"), integration.Id.ToString("N")).Unprotect(body["protected:".Length..])
             : body;
 
-    private static object Payload(OutboxEventContext evt, string? orderId)
+    private static object Payload(OutboxEventContext evt, string? orderId, string? archiveLink)
     {
         var i = evt.Invoice;
         return new
@@ -762,7 +802,7 @@ public sealed partial class IntegrationService(
             externalOrderId = orderId,
             customer = new { taxId = i.Customer.TaxId, title = i.Customer.Title, email = i.Customer.Email, phone = i.Customer.Phone },
             note = evt.Note,
-            links = new { view = evt.PublicLink, panel = evt.PanelLink },
+            links = new { view = evt.PublicLink, archive = archiveLink, panel = evt.PanelLink },
         };
     }
 
@@ -803,6 +843,7 @@ public sealed partial class IntegrationService(
             Country = c.Country is null or "TR" or "tr" or "Turkey" or "Türkiye" ? "Türkiye" : c.Country,
             Email = MessagingSettingsService.IsEmail(c.Email) ? c.Email : null,
             Phone = c.Phone is null ? null : Truncate(c.Phone, 30),
+            Alias = string.IsNullOrWhiteSpace(c.Alias) ? null : Truncate(c.Alias.Trim(), 200),
         };
 
         var lines = new List<InvoiceLine>();
@@ -835,7 +876,24 @@ public sealed partial class IntegrationService(
         };
     }
 
-    private static bool VerifySignature(IntegrationKind kind, string secret, byte[] body, IHeaderDictionary headers)
+    private static string SignatureName(IntegrationKind kind) => kind switch
+    {
+        IntegrationKind.WooCommerce => "X-WC-Webhook-Signature",
+        IntegrationKind.Shopify => "X-Shopify-Hmac-Sha256",
+        _ => SignatureHeader,
+    };
+
+    private static bool HasSignatureFormat(IntegrationKind kind, string? signature)
+    {
+        if (kind is IntegrationKind.WooCommerce or IntegrationKind.Shopify)
+            return signature is { Length: 44 }
+                && Convert.TryFromBase64String(signature, stackalloc byte[32], out var written) && written == 32;
+
+        return signature is { Length: 71 } && signature.StartsWith("sha256=", StringComparison.OrdinalIgnoreCase)
+            && signature.AsSpan(7).IndexOfAnyExcept("0123456789abcdefABCDEF") < 0;
+    }
+
+    private static bool VerifySignature(IntegrationKind kind, string secret, ReadOnlySpan<byte> body, IHeaderDictionary headers)
     {
         var key = Encoding.UTF8.GetBytes(secret);
         var hash = HMACSHA256.HashData(key, body);
@@ -919,6 +977,8 @@ public sealed partial class IntegrationService(
         {
             throw new ValidationFailedException("INTEGRATION_INVALID", "Entegrasyon kaydedilemedi.", errors);
         }
+        if (settings.GetValueOrDefault(IntegrationCatalog.WebhookUrl) is not null && !secrets.ContainsKey(IntegrationCatalog.SigningSecret))
+            secrets[IntegrationCatalog.SigningSecret] = NewSecret();
 
         integration.Name = request.Name.Trim();
         integration.IsActive = request.IsActive;

@@ -25,8 +25,7 @@
 
   waitForUi(function (ui) {
     try {
-      var saved = sessionStorage.getItem(STORE);
-      if (saved) { authorize(ui, saved); }
+      sessionStorage.removeItem(STORE);
     } catch (e) { }
 
     var host = document.querySelector('.swagger-ui .information-container');
@@ -41,10 +40,15 @@
     host.parentNode.insertBefore(panel, host.nextSibling);
 
     button.addEventListener('click', function () {
+      button.disabled = true;
       status.textContent = 'Giriş yapılıyor…';
       status.className = 'gibframework-login-status';
       fetch('/api/v1/auth/login', {
         method: 'POST',
+        credentials: 'omit',
+        cache: 'no-store',
+        redirect: 'error',
+        signal: AbortSignal.timeout(30000),
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userCode: user.value, password: pass.value, totpCode: totp.value || null })
       }).then(function (r) {
@@ -56,7 +60,6 @@
           return;
         }
         authorize(ui, res.body.accessToken);
-        try { sessionStorage.setItem(STORE, res.body.accessToken); } catch (e) { }
         pass.value = '';
         totp.value = '';
         status.textContent = 'Yetkilendirildi: ' + res.body.user.displayName + ' (' + res.body.user.roles.join(', ') + ')';
@@ -64,6 +67,8 @@
       }).catch(function () {
         status.textContent = 'Sunucuya ulaşılamadı.';
         status.className = 'gibframework-login-status error';
+      }).finally(function () {
+        button.disabled = false;
       });
     });
   });

@@ -3,6 +3,46 @@
 Bu dosya [Keep a Changelog](https://keepachangelog.com/tr/1.1.0/) biçimini ve [Anlamsal Sürümleme](https://semver.org/lang/tr/)
 kurallarını izler.
 
+## **[6.1.0] - 2026-11-15**
+
+### Güvenlik ve HTTP
+
+- Panel oturumu `HttpOnly`, `Secure` ve `SameSite=Strict` çereze taşındı. Panel isteği çerezli oturum için özel bir başlık gönderir. Dış API istemcileri Bearer ve API anahtarıyla çalışmaya devam eder.
+- Geliştirme token’ı üreten DevAuth rotası Release derlemesinden çıkarıldı. Kilitli hesap yanıtında yeniden deneme saati kaldırıldı.
+- Parola sıfırlama talepleri SQL kuyruğuna yazılır. Kullanıcı sorgusu, talebin işlenmesi ve yönetici bildirimi arka planda yürütülür.
+- GİB’den alınan HTML belgeleri yalıtılmış önizlemede açılır. Panelin içerik güvenliği ilkesi, belge önizlemesinden ayrı uygulanır.
+- Webhook gövdesi okunmadan önce entegrasyon ve imza başlığı kontrol edilir. Gövde boyutu ve eşzamanlı işlem sayısı sınırlandırıldı. WooCommerce etkinleştirme isteği için küçük boyutlu ping desteği korundu.
+- GİB istemcisi tanımlı üretim ve test HTTPS adresleriyle sınırlandırıldı. İlgili dış servis istemcilerinde yanıt boyutu, zaman aşımı ve yönlendirme kontrolleri sıkılaştırıldı.
+- Panel istekleri zaman aşımı ve iptali destekler. Geçici bağlantı veya sunucu hatalarında GET istekleri sınırlı sayıda yeniden denenir. Güncelleme ve silme işlemleri PUT, PATCH ve DELETE rotalarını kullanır.
+- Firma logosu uç noktası oturum ve ilgili firma yetkisi gerektirir. Açık fatura bağlantıları doğrulamadan önce URL güvenli belirteç biçimi açısından kontrol edilir.
+- WHMCS bağlantı testi, panelin IP kontrolünde kullandığı adresi, ret nedenini ve istek kimliğini gösterir.
+- Güvenilen ters vekil zincirinin uzunluğu ve doğrudan Cloudflare bağlantısında istemci IP başlığı yapılandırılabilir.
+
+### Faturalar ve mobil kullanım
+
+- Fatura listesi sayfa başına en fazla 500 kayıt döndürür. Dar ekranlarda belge numarası, alıcı, tutar ve durum bilgileri satır içinde dikey gösterilir.
+- Fatura filtreleri, gösterge kartları, grafik, fatura kalemleri ve alıcı arama listesi dar ekranlara uyarlandı.
+- Geçerli VKN ve TCKN için otomatik alıcı sorgusu çalışır. Kimlik numarası değiştiğinde sürmekte olan sorgu iptal edilir ve geciken yanıtın formu güncellemesi engellenir.
+- Hesap durumuna göre yönlendirme etkinse ve tarih için uygulanabilir kural bulunamazsa belge türü tarafların e-Fatura kayıt durumundan belirlenebilir. Kullanılan karar uyarı ve denetim iziyle kaydedilir.
+
+### Entegrasyonlar
+
+- Sipariş bağlantısı ve fatura taslağı aynı veritabanı işleminde yazılır. Böylece ilk durum bildirimi, ilgili entegrasyon bağlantısı oluştuktan sonra işlenir. Aynı sipariş tekrar gönderildiğinde mevcut fatura döndürülür.
+- Kaynak toplamını ileten entegrasyonlarda bu tutar hesaplanan fatura toplamıyla karşılaştırılır. Tutar uyuşmazlığında aktarım hata olarak kaydedilir.
+- **WHMCS 2.3.1**: Durum bildirimleri ilgili WHMCS entegrasyonuna gider. Bildirim sıra numarası sayesinde geciken veya tekrarlanan bildirimler güncel durumun üzerine yazamaz.
+- **WISECP**: Güncel PHP webhook ödenen faturayı imzalı HTTPS isteğiyle gönderir. Başarı için panelin geçerli fatura kimliği döndürmesi gerekir.
+- **WooCommerce ve Shopify**: Kaynak toplamı sağlandığında fatura tutarıyla karşılaştırılır. Shopify’da ödeme durumu, yapılandırılmış mağaza alan adı, ürün indirimleri ve indirimli kargo bedeli işlenir.
+- **Trendyol**: Sipariş V2’nin indirimli birim fiyatından indirimin ikinci kez düşülmesi düzeltildi. Sağlayıcının paket toplamı varsa fatura toplamıyla karşılaştırılır.
+- **Hepsiburada ve n11**: Sipariş eşitleme ile PDF bağlantısı gönderme sözleşmeleri doğrulandı. n11 fatura bağlantısı gönderiminde HTTP durum kodu ve SOAP işlem sonucu birlikte değerlendirilir.
+- **Dış bildirimler**: Bildirim adresi tanımlandığında imza anahtarı oluşturulur. Anahtarsız teslimatlar hata olarak kaydedilir. Uygun teslimatlar panelden yeniden denenebilir.
+
+### Kurulum ve doğrulama
+
+- SQL şema 7 parola sıfırlama talep kuyruğunu ekler. Şema 6 kurulumları, uygulama dosyaları güncellenmeden önce [08-Upgrade-Schema.sql](database/08-Upgrade-Schema.sql) betiğini çalıştırmalıdır.
+- IIS/Plesk paketi bağımsız Windows x64 Release yayını, SQL kurulum betikleri ve WHMCS 2.3.1 eklentisini içerir. Kurulum adımları [install.md](install.md) dosyasındadır.
+- Release yayını geçici SQL Server veritabanıyla çalıştırıldı. Sağlık ve hazırlık denetimleri, panel, yalıtılmış önizleme ve 320, 375, 768, 1280 px ekran genişlikleri doğrulandı.
+- Entegrasyon aktarımı, fatura tutarı, yinelenen istekler ve bildirimler yerel testlerle doğrulandı. Pazaryeri uç noktaları örnek sağlayıcı yanıtlarıyla sınandı.
+
 ## **[6.0.0] - 2026-11-14**
 
 Bu ana sürüm, fatura kesen kullanıcıların günlük çalışma ekranlarını ve uygulamanın yönetim tarafını birlikte güncelliyor. Üst menü ve belge ayrıntısı yeniden düzenlendi. Fatura önizlemesiyle PDF çıktısı daha ayrıntılı hale geldi. Firma yöneticileri kendi IP kurallarını ayarlayabiliyor ve onay bekleyen kendi faturalarını sonuçlandırabiliyor. GİB taslak mutabakatı, belge arşivi ve pazaryeri siparişlerinde operatörün takip edebileceği daha ayrıntılı durumlar bulunuyor.

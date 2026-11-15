@@ -28,9 +28,11 @@ public sealed class MessagingController(
     public async Task<MessagingSettingsView> Settings(CancellationToken ct) => await settings.ViewAsync(ct);
 
     [HttpPut("settings/smtp")]
+    [HttpPost("settings/smtp/update")]
     public async Task<MessagingSettingsView> SaveSmtp([FromBody] SaveSmtpRequest request, CancellationToken ct) => await settings.SaveSmtpAsync(request, ct);
 
     [HttpPut("settings/sms")]
+    [HttpPost("settings/sms/update")]
     public async Task<MessagingSettingsView> SaveSms([FromBody] SaveSmsRequest request, CancellationToken ct) => await settings.SaveSmsAsync(request, ct);
 
     [HttpPost("test")]
@@ -48,7 +50,9 @@ public sealed class MessagingController(
             throw new ValidationFailedException("MESSAGING_TEST", "Deneme mesajı oluşturulamadı.", result.Skipped);
         }
 
-        var message = await messages.GetAsync(tenantId, result.MessageIds[0], ct) ?? throw new NotFoundException("Mesaj bulunamadı.");
+        // Mesaj kilitlenmeden gönderilirse sonuç kaydedilemez ("Gönderilemedi" görünür) ve kuyruk aynı mesajı tekrar gönderir.
+        var message = await messages.ClaimByIdAsync(tenantId, result.MessageIds[0], clock.UtcNow, TimeSpan.FromMinutes(5), ct)
+            ?? throw new NotFoundException("Mesaj bulunamadı.");
         message.Attempts = int.MaxValue;
         await delivery.DeliverAsync(message, ct);
         var final = await messages.GetAsync(tenantId, message.Id, ct);
@@ -75,6 +79,7 @@ public sealed class MessagingController(
     public async Task<IReadOnlyList<TemplateView>> Templates(CancellationToken ct) => await settings.TemplatesAsync(ct);
 
     [HttpPut("templates")]
+    [HttpPost("templates/update")]
     public async Task<IActionResult> SaveTemplate([FromBody] SaveTemplateRequest request, CancellationToken ct)
     {
         await settings.SaveTemplateAsync(request, ct);
@@ -82,9 +87,26 @@ public sealed class MessagingController(
     }
 
     [HttpDelete("templates/{key}/{channel}")]
+    [HttpPost("templates/{key}/{channel}/delete")]
     public async Task<IActionResult> ResetTemplate(string key, MessageChannel channel, CancellationToken ct)
     {
         await settings.ResetTemplateAsync(key, channel, ct);
+        return NoContent();
+    }
+
+    [HttpGet("custom-templates")]
+    public async Task<CustomTemplatesView> CustomTemplates(CancellationToken ct) => await settings.CustomTemplatesAsync(ct);
+
+    [HttpPut("custom-templates")]
+    [HttpPost("custom-templates/update")]
+    public async Task<CustomTemplate> SaveCustomTemplate([FromBody] SaveCustomTemplateRequest request, CancellationToken ct) =>
+        await settings.SaveCustomTemplateAsync(request, ct);
+
+    [HttpDelete("custom-templates/{id:guid}")]
+    [HttpPost("custom-templates/{id:guid}/delete")]
+    public async Task<IActionResult> DeleteCustomTemplate(Guid id, CancellationToken ct)
+    {
+        await settings.DeleteCustomTemplateAsync(id, ct);
         return NoContent();
     }
 
@@ -93,7 +115,9 @@ public sealed class MessagingController(
     {
         ArgumentNullException.ThrowIfNull(request);
         var tenantId = context.RequireTenant();
-        var def = TemplateCatalog.Find(request.Key) ?? throw new NotFoundException("Şablon bulunamadı.");
+        var def = TemplateCatalog.Find(request.Key)
+            ?? (request.Key == TemplateCatalog.CustomPreviewKey ? TemplateCatalog.CustomPreview : null)
+            ?? throw new NotFoundException("Şablon bulunamadı.");
         var config = await settings.GetAsync(tenantId, ct);
         var (values, brand) = await notifications.ContextAsync(tenantId, config, ct);
         foreach (var v in def.Variables.Where(v => !values.ContainsKey(v.Name) || string.IsNullOrEmpty(values[v.Name])))
@@ -166,15 +190,12 @@ public sealed class TenantLogoController(TenantLogoRepository logos, ITenantCont
     private const int MaxBytes = 512 * 1024;
 
     [HttpGet("{tenantId:guid}/logo")]
-    [AllowAnonymous]
-    [ResponseCache(Duration = 300, Location = ResponseCacheLocation.Any)]
+    [Authorize]
+    [Microsoft.AspNetCore.RateLimiting.EnableRateLimiting(PublicInvoiceController.RateLimitPolicy)]
     public async Task<IActionResult> Get(Guid tenantId, CancellationToken ct)
     {
-        var logo = await logos.GetAsync(tenantId, ct);
-        if (logo is null)
-        {
+        if (context.TenantId != tenantId || await logos.GetAsync(tenantId, ct) is not { } logo)
             return NotFound();
-        }
 
         Response.Headers.ETag = $"\"{logo.Sha256}\"";
         return File(logo.Data, logo.ContentType);
@@ -190,6 +211,7 @@ public sealed class TenantLogoController(TenantLogoRepository logos, ITenantCont
     }
 
     [HttpPut("current/logo")]
+    [HttpPost("current/logo/update")]
     [Authorize(Policy = Policies.CompanyManage)]
     [RequestSizeLimit(MaxBytes + 64 * 1024)]
     public async Task<IActionResult> Upload(IFormFile file, CancellationToken ct)
@@ -210,18 +232,19 @@ public sealed class TenantLogoController(TenantLogoRepository logos, ITenantCont
         var type = Sniff(data) ?? throw new ValidationFailedException("LOGO_TYPE", "Yalnızca PNG, JPEG veya WebP yükleyebilirsiniz.", []);
         var tenantId = context.RequireTenant();
         await logos.SaveAsync(tenantId, type, data, context.RequireUser(), clock.UtcNow, ct);
-        await audit.AppendSystemAsync(tenantId, new Models.Audit.AuditEntry("TENANT_LOGO_UPDATED", "Tenant", tenantId.ToString(), "Success",
-            new { type, bytes = data.Length, by = context.UserId }), null, ct);
+        await audit.AppendActorAsync(tenantId, new Models.Audit.AuditEntry("TENANT_LOGO_UPDATED", "Tenant", tenantId.ToString(), Data:
+            new { type, bytes = data.Length }), ct);
         return await Info(ct);
     }
 
     [HttpDelete("current/logo")]
+    [HttpPost("current/logo/delete")]
     [Authorize(Policy = Policies.CompanyManage)]
     public async Task<IActionResult> Delete(CancellationToken ct)
     {
         var tenantId = context.RequireTenant();
         await logos.DeleteAsync(tenantId, ct);
-        await audit.AppendSystemAsync(tenantId, new Models.Audit.AuditEntry("TENANT_LOGO_DELETED", "Tenant", tenantId.ToString(), "Success", new { by = context.UserId }), null, ct);
+        await audit.AppendActorAsync(tenantId, new Models.Audit.AuditEntry("TENANT_LOGO_DELETED", "Tenant", tenantId.ToString()), ct);
         return NoContent();
     }
 

@@ -20,6 +20,7 @@ public sealed class ApiKeysController(ApiKeyService keys) : ControllerBase
         Ok(await keys.CreateAsync(request, ct));
 
     [HttpDelete("{id:guid}")]
+    [HttpPost("{id:guid}/delete")]
     public async Task<IActionResult> Revoke(Guid id, CancellationToken ct) =>
         await keys.RevokeAsync(id, ct) ? NoContent() : NotFound();
 }

@@ -14,6 +14,8 @@ export default defineConfig({
     proxy: {
       '/api': 'http://localhost:5097',
       '/health': 'http://localhost:5097',
+      '/preview': 'http://localhost:5097',
+      '/swagger': 'http://localhost:5097',
     },
   },
 });

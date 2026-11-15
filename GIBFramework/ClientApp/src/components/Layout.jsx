@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router';
-import { api, LOGO_EVENT } from '../api.js';
+import { api } from '../api.js';
+import { useTenantLogo } from './useTenantLogo.js';
 import { ROLE_LABELS } from '../format.js';
 import { useSession } from '../session.jsx';
 import { useLoad, useToast } from './ui.jsx';
@@ -101,22 +102,7 @@ function ApiLinks() {
 
 function TenantLogo() {
   const session = useSession();
-  const [url, setUrl] = useState(null);
-  const tenantId = session.tenant?.id;
-  useEffect(() => {
-    if (!tenantId) {
-      setUrl(null);
-      return undefined;
-    }
-    let alive = true;
-    const load = () => api.get('/api/v1/tenants/current/logo-info').then((i) => alive && setUrl(i.hasLogo ? i.url : null)).catch(() => alive && setUrl(null));
-    load();
-    window.addEventListener(LOGO_EVENT, load);
-    return () => {
-      alive = false;
-      window.removeEventListener(LOGO_EVENT, load);
-    };
-  }, [tenantId]);
+  const url = useTenantLogo(session.tenant?.id);
   if (!url) return null;
   return <img className="navbar-tenant-logo d-none d-md-inline" src={url} alt={session.tenant?.name || 'Firma logosu'} />;
 }
@@ -159,6 +145,7 @@ function TenantSwitcher() {
 function UserMenu() {
   const session = useSession();
   const navigate = useNavigate();
+  const toast = useToast();
   const { open, setOpen, ref } = useDropdown();
   const p = session.permissions;
   return (
@@ -186,8 +173,12 @@ function UserMenu() {
         <li>
           <button className="dropdown-item text-danger" type="button" onClick={async () => {
             setOpen(false);
-            await session.logout();
-            navigate('/login');
+            try {
+              await session.logout();
+              navigate('/login');
+            } catch (error) {
+              toast.error(error);
+            }
           }}><i className="bi bi-box-arrow-right me-2" aria-hidden="true" />Çıkış</button>
         </li>
       </ul>

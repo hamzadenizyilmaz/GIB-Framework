@@ -95,6 +95,7 @@ export function Login() {
           <form className="login-card" noValidate onSubmit={submit}>
             <div className="login-brand"><Brand variant="full" /></div>
             <h1 className="login-title">Hesabınıza giriş yapın</h1>
+            {location.state?.installed && <p className="alert alert-success mt-3" role="status">Firma ve kullanıcı hesapları oluşturuldu. Kurulum kapatıldı.</p>}
             <p className="login-subtitle">e-Belge işlemlerinize güvenle devam edin.</p>
             <ErrorAlert error={error} />
             <label className="form-label" htmlFor="userCode">Kullanıcı kodu</label>

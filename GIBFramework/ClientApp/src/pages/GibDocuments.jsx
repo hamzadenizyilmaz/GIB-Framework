@@ -1,3 +1,4 @@
+import { HtmlPreview } from '../components/HtmlPreview.jsx';
 import { useState } from 'react';
 import { Link } from 'react-router';
 import { api } from '../api.js';
@@ -37,7 +38,7 @@ export function GibDocuments() {
 
   const view = async (ettn, approved) => {
     const html = await api.text(`/api/v1/gib-portal/documents/${ettn}/html?approved=${approved}`);
-    await dialogs.show('GİB görünümü', <iframe className="preview-frame" sandbox="" title="Belge önizleme" srcDoc={html} />, 'xl');
+    await dialogs.show('GİB görünümü', <HtmlPreview className="preview-frame" title="Belge önizleme" html={html} />, 'xl');
   };
 
   if (!status.connected) {

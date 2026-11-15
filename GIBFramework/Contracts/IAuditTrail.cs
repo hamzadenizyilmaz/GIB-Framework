@@ -10,6 +10,9 @@ public interface IAuditTrail
 
     Task<AuditEvent> AppendActorAsync(Guid tenantId, AuditEntry entry, CancellationToken cancellationToken);
 
+    Task<AuditEvent> AppendAuthenticationAsync(Guid tenantId, string? userCode, IReadOnlyList<string> roles, string? ip,
+        AuditEntry entry, CancellationToken cancellationToken);
+
     Task<IReadOnlyList<AuditEvent>> ListAsync(Guid tenantId, string? entityId, int take, long? beforeSequence, CancellationToken cancellationToken,
         string? userId = null, string? action = null, string? role = null, DateTimeOffset? from = null, DateTimeOffset? until = null,
         string? result = null);

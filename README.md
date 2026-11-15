@@ -1,8 +1,10 @@
 <p align="center">
+  <img src="assets/branding/gib-framework-logo.svg" alt="GIB Framework" width="42%" align="middle">
+  &nbsp;&nbsp;&nbsp;
   <a href="https://www.bilhost.com/panel/aff.php?aff=37">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="assets/branding/bilhost-logo-dark.svg">
-      <img src="assets/branding/bilhost-logo.svg" alt="Bilhost" height="90">
+      <img src="assets/branding/bilhost-logo.svg" alt="Bilhost" width="42%" align="middle">
     </picture>
   </a>
 </p>
@@ -10,8 +12,6 @@
 <h2 align="center">Projemiz <a href="https://www.bilhost.com/panel/aff.php?aff=37">Bilhost</a> tarafından desteklenmektedir.</h2>
 
 <p align="center"><a href="https://www.bilhost.com/panel/aff.php?aff=37"><b>www.bilhost.com</b></a></p>
-
-<br>
 
 <div align="center">
 
@@ -23,8 +23,7 @@ Gelir İdaresi Başkanlığı e-Fatura ve e-Arşiv süreçleri için çok amaçl
 ![React](https://img.shields.io/badge/React-19-149ECA?logo=react&logoColor=white)
 ![SQL Server](https://img.shields.io/badge/SQL%20Server-2019%2B-CC2927?logo=microsoftsqlserver&logoColor=white)
 ![Sürüm](https://img.shields.io/badge/s%C3%BCr%C3%BCm-6.0.0-0778E6)
-[![Architecture diagram](https://gitdiagram.com/diagram-badge.svg)](https://gitdiagram.com/hamzadenizyilmaz/gib-framework?utm_source=readme&utm_medium=badge)
-![Uyarı](https://img.shields.io/badge/canl%C4%B1%20kullan%C4%B1m-%C3%B6n%20do%C4%9Frulama%20gerekir-C0392B)
+[![Architecture diagram](https://gitdiagram.com/diagram-badge.svg)](https://gitdiagram.com/hamzadenizyilmaz/gib-framework)
 
 [Proje sitesi](https://framework.hamzadenizyilmaz.com.tr) &nbsp;|&nbsp;
 [API dokümantasyonu](#rest-api) &nbsp;|&nbsp;
@@ -43,59 +42,26 @@ Gelir İdaresi Başkanlığı e-Fatura ve e-Arşiv süreçleri için çok amaçl
 >
 > **Gerekli bağımsız kontroller tamamlanmadan gerçek mükellef/müşteri verileriyle işlem yapmayın; gerçek e-Fatura veya e-Arşiv belgesi düzenlemeyin, imzalamayın ya da göndermeyin.** İlk denemeleri izole bir geliştirme/test ortamında ve sentetik verilerle yapın.
 >
-> Bu uyarının tamamını ve [canlıya geçiş kontrol listesini](#canlıya-geçiş-öncesi-kontrol-listesi) okuyun.
-
-## Önemli uyarı ve kullanım sorumluluğu
-
-### 1. Projenin kapsamı ve resmî statüsü
-
-GIB Framework, e-Fatura ve e-Arşiv süreçlerine yönelik bağımsız bir yazılım çalışmasıdır. **Gelir İdaresi Başkanlığı ile resmî ortaklık, akreditasyon, sertifikasyon, onay veya yetkilendirme iddiası taşımaz.** Depoda GİB, UBL-TR, e-Fatura, e-Arşiv, mali mühür ve benzeri adların kullanılması bu statüyü değiştirmez.
-
-### 2. Geliştirme durumu ve doğrulama sınırları
-
-README'de belirtilen özellikler, mimari bileşenler, sürüm numarası, güvenlik kontrolleri ve entegrasyon akışları **üretim uygunluğu taahhüdü değildir**. Bir özelliğin belgelenmiş veya uygulanmış olması, bütün senaryolarda doğrulandığı anlamına gelmez. Yeni sürümler veya yapılandırmalar mevcut davranışı değiştirebilir.
-
-### 3. Mevzuat, e-belge geçerliliği ve resmî süreçler
-
-Vergi mevzuatı, belge düzenleme kuralları, UBL-TR/XSD/Schematron gereklilikleri, elektronik imza ve mali mühür koşulları, GİB servisleri ve yetkilendirme yöntemleri zaman içinde değişebilir. **Gerçek belge düzenleme veya gönderim öncesinde yürürlükteki resmî gereklilikler ile ilgili mükellef/entegrasyon yetkilerini ayrıca doğrulayın.** Gerekli durumlarda yetkili mali müşavir, hukukçu veya ilgili uzmanlardan görüş alın. Bu dokümantasyon vergisel ya da hukuki danışmanlık yerine geçmez.
-
-### 4. Güvenlik, kişisel veriler ve gizli bilgiler
-
-- **Gerçek müşteri, mükellef, vergi kimlik, iletişim veya fatura verilerini** doğrulanmamış geliştirme/demo ortamlarına aktarmayın.
-- Demo kullanıcıları, yayımlanmış örnek parolalar, API anahtarları, JWT sırları, bağlantı dizeleri ve sertifikalar **canlı ortamda kullanılmamalıdır**. Canlı ortam için benzersiz ve güçlü gizli bilgiler oluşturun; gerekenleri güvenli kanallarda yönetin ve döndürün.
-- İnternete açık dağıtımdan önce kimlik doğrulama, yetkilendirme, firma veri izolasyonu, API/webhook güvenliği, denetim kayıtları, TLS, yedekleme ve geri yükleme süreçlerini bağımsız olarak test edin.
-- Kişisel verilerin işlenmesi, saklanması, aktarılması ve silinmesine ilişkin geçerli yükümlülükleri; erişim yetkilerini, saklama sürelerini ve olay müdahale süreçlerini ayrıca değerlendirin.
-
-### 5. Haricî servisler, mali işlemler ve operasyonel riskler
-
-GİB portalı, pazaryerleri, SMTP, SMS, ödeme dışı faturalama akışları, webhook uç noktaları ve diğer üçüncü taraf bağlantılarında servis değişiklikleri, erişim sorunları veya beklenmeyen yanıtlar oluşabilir. **Başarılı API yanıtı veya PDF/XML üretimi, belgenin hukuken geçerli olduğunu ya da ilgili kurum tarafından kabul edildiğini tek başına kanıtlamaz.** Gerçek işlemlerden önce uçtan uca kabul, ret, iptal, tekrar deneme, mükerrer kayıt ve arşivleme senaryolarını doğrulayın.
-
-### 6. Kullanım kararı ve sorumluluk
-
-Bu depoyu inceleyen, kuran, değiştiren veya kullanan kişi ve kuruluşlar; kendi ortamlarının güvenlik, mevzuat, veri koruma, işletim ve entegrasyon gerekliliklerini değerlendirmekle sorumludur. **Kaynak kodun kamuya açık olması, resmî onay veya koşulsuz kullanım/dağıtım hakkı anlamına gelmez.** Hak sahipliği ve kullanım koşulları için [Lisans ve iletişim](#lisans-ve-iletişim) bölümünü inceleyin.
-
-> [!IMPORTANT]
-> **Önerilen başlangıç:** Önce [kurulum kılavuzunu](install.md) ve [güvenlik politikasını](SECURITY.md) inceleyin. Yerel testleri sentetik verilerle gerçekleştirin. Gerçek veriler ve canlı GİB işlemleri için aşağıdaki kontrol listesindeki gereklilikleri ayrı ayrı doğrulayın.
+> Bu uyarının tamamını okuyun.
 
 ## İçindekiler
 
-1. [Önemli uyarı ve kullanım sorumluluğu](#önemli-uyarı-ve-kullanım-sorumluluğu)
-2. [Genel bakış](#genel-bakış)
-3. [Özellikler](#özellikler)
-4. [Mimari](#mimari)
-5. [Teknoloji yığını](#teknoloji-yığını)
-6. [Kurulum](#kurulum)
-7. [Demo hesapları](#demo-hesapları)
-8. [Roller ve yetkiler](#roller-ve-yetkiler)
-9. [Fatura mimarisi](#fatura-mimarisi)
-10. [E-posta ve SMS bildirimleri](#e-posta-ve-sms-bildirimleri)
-11. [Pazaryeri ve e-ticaret entegrasyonları](#pazaryeri-ve-e-ticaret-entegrasyonları)
-12. [REST API](#rest-api)
-13. [Güvenlik](#güvenlik)
-14. [Canlı ortama alma](#canlı-ortama-alma)
-15. [Veritabanı](#veritabanı)
-16. [Proje yapısı](#proje-yapısı)
-17. [Lisans ve iletişim](#lisans-ve-iletişim)
+1. [Genel bakış](#genel-bakış)
+2. [Özellikler](#özellikler)
+3. [Mimari](#mimari)
+4. [Teknoloji yığını](#teknoloji-yığını)
+5. [Kurulum](#kurulum)
+6. [Demo hesapları](#demo-hesapları)
+7. [Roller ve yetkiler](#roller-ve-yetkiler)
+8. [Fatura mimarisi](#fatura-mimarisi)
+9. [E-posta ve SMS bildirimleri](#e-posta-ve-sms-bildirimleri)
+10. [Pazaryeri ve e-ticaret entegrasyonları](#pazaryeri-ve-e-ticaret-entegrasyonları)
+11. [REST API](#rest-api)
+12. [Güvenlik](#güvenlik)
+13. [Canlı ortama alma](#canlı-ortama-alma)
+14. [Veritabanı](#veritabanı)
+15. [Proje yapısı](#proje-yapısı)
+16. [Lisans ve iletişim](#lisans-ve-iletişim)
 
 ## Genel bakış
 
@@ -191,14 +157,13 @@ sistemlerdeki kesintiler fatura işlemini etkilemez.
 
 ## Kurulum
 
-Kurulum için .NET 10 SDK 10.0.404, Node.js 24 ve SQL Server 2019 veya üzeri kullanın. [Kurulum kılavuzundaki](install.md) SQL kurulumunu ve yerel gizli ayarları tamamladıktan sonra uygulamayı başlatın.
+Kurulum için .NET 10 SDK 10.0.302 veya üzeri, Node.js 24 ve SQL Server 2019 veya üzeri kullanın. [Kurulum kılavuzundaki](install.md) SQL kurulumunu ve yerel gizli ayarları tamamladıktan sonra uygulamayı başlatın.
 
 ```bash
 dotnet run --project GIBFramework/GIBFramework.csproj --launch-profile http
 ```
 
 [Panel](http://localhost:5097/app/#/login) ve [hazırlık denetimi](http://localhost:5097/health/ready) aynı sunucudadır. Panel derlemesi otomatik çalışır. Sunucu genelindeki ve firma bazındaki kurallar **Ayarlar → Güvenlik → IP Erişimi** sayfasından yönetilir. Başlangıçtaki platform kuralları sunucuda `IpAccess:Allow` ve `IpAccess:Deny` ile verilebilir.
-
 ## Demo hesapları
 
 [Demo giriş ekranı](https://framework.hamzadenizyilmaz.com.tr/app/#/login)
@@ -211,9 +176,6 @@ dotnet run --project GIBFramework/GIBFramework.csproj --launch-profile http
 | `muhasebe` | `GibDemo2026` | Muhasebeci, fatura hazırlayan |
 | `imza` | `GibDemo2026` | İmza yetkilisi, entegrasyon yöneticisi |
 | `denetci` | `GibDemo2026` | Arşiv denetçisi |
-
-> [!CAUTION]
-> **Bu tabloda yayımlanan parola yalnızca demo/test amaçlıdır.** Aynı parolayı canlı ortamda kullanmayın; paylaşılan kimlik bilgilerini gerçek verilerle çalışan hiçbir sistemde etkin bırakmayın.
 
 **Canlı demo durumu:** Son kontrolde site `yonetici` için bu parolayla girişi reddetti. Tablo, v6.0.0 sürümünde yayımlanan demo bilgilerini gösterir.
 
@@ -322,7 +284,7 @@ anahtarları ASP.NET Core Data Protection ile şifrelenerek saklanır.
 | n11 | Sipariş paketleri REST servisi üzerinden sorgulanır | Fatura bağlantısı `SaveLinkSellerInvoice` ile kaydedilir |
 | WooCommerce | `order.updated` webhook, `X-WC-Webhook-Signature` doğrulaması | Siparişe müşteriye görünen fatura notu |
 | Shopify | `orders/paid` webhook, `X-Shopify-Hmac-Sha256` doğrulaması | İmzalı webhook |
-| WHMCS | `InvoicePaid` kancası (hazır PHP kanca dosyası) | İmzalı webhook |
+| WHMCS | [WHMCS eklentisi](module/whmcs/README.md) veya bağımsız `InvoicePaid` kancası | İmzalı webhook (eklentide kuyruk + cron yeniden deneme ve `callback.php` ile durum bildirimi) |
 | WISECP | Fatura durum değişikliği kancası (hazır PHP kanca dosyası) | İmzalı webhook |
 | Özel uygulama | Genel sipariş şeması, `X-GibFramework-Signature` doğrulaması | İmzalı webhook |
 
@@ -379,23 +341,6 @@ Güvenlik açığı bildirimi için [SECURITY.md](SECURITY.md) dosyasına bakın
 
 ## Canlı ortama alma
 
-> [!WARNING]
-> **Bu bölümdeki dağıtım komutları tek başına canlı kullanım onayı değildir.** Aşağıdaki gereklilikler hedef ortam, güncel mevzuat ve kuruluşunuzun ihtiyaçları için ayrıca doğrulanmalıdır.
-
-### Canlıya geçiş öncesi kontrol listesi
-
-- [ ] Gerekli GİB başvuru, erişim, yetkilendirme ve e-belge süreçlerinin güncelliği kontrol edildi.
-- [ ] Desteklenen belge tipleri, UBL-TR şema/şematron kuralları, imza ve mühür zinciri gerçekçi test senaryolarıyla doğrulandı.
-- [ ] Faturanın oluşturulması, onayı, imzalanması, gönderimi, kabul/ret yanıtları, iptali ve arşivlenmesi uçtan uca sınandı.
-- [ ] Kimlik doğrulama, MFA, rol/yetki sınırları ve firmalar arası veri izolasyonu test edildi.
-- [ ] Gizli bilgiler güvenli şekilde sağlandı; demo hesapları ve varsayılan/örnek parolalar canlı ortamdan kaldırıldı veya değiştirildi.
-- [ ] HTTPS/TLS, sertifikalar, güvenilir proxy ayarları, ağ çıkışları, güvenlik duvarı, günlükleme ve sır maskeleme denetlendi.
-- [ ] API, webhook ve üçüncü taraf entegrasyonlarında imza doğrulama, idempotency, hız sınırı ve hata/tekrar deneme davranışı sınandı.
-- [ ] Veritabanı şema/migrasyon durumu, yedekleme, geri yükleme ve felaket kurtarma prosedürleri doğrulandı.
-- [ ] Kişisel veri ve belge saklama yükümlülükleri, erişim denetimleri ve olay müdahale süreçleri değerlendirildi.
-- [ ] İzleme, alarm, işlem mutabakatı, başarısız gönderimlerin yeniden işlenmesi ve operasyonel sahiplik belirlendi.
-- [ ] Test sonuçları kayıt altına alındı; kalan riskler değerlendirilerek yetkili sorumlularca canlıya geçiş kararı verildi.
-
 ### Plesk (Windows Server 2019-2022-2025)
 
 Yayın bağımsız `win-x64` olarak derlenir. IIS için .NET 10 Hosting Bundle ile gelen ASP.NET Core Module V2 gerekir.
@@ -416,13 +361,13 @@ dotnet publish GIBFramework/GIBFramework.csproj -c Release -r win-x64 --self-con
 
 IIS/Plesk uygulama havuzuna .NET 10 Hosting Bundle ile gelen ASP.NET Core Module V2 gerekir. Uygulama havuzunda `ASPNETCORE_ENVIRONMENT=Production` tanımlayın ve gizli değerleri dağıtım ortamından verin. Üretim ayarlarını tamamladıktan sonra HTTPS üzerinden `/health` ve `/health/ready` uçlarını doğrulayın. Sistem ekranı hazırlık nedenini ve denetim süresini gösterir.
 
-v6.0.0 SQL şema 5 ile çalışır. API anahtarıyla çalışan istemciler `/api/v1/auth/permissions` ve atanmış makine işlemlerini kullanabilir. Hesap, fatura onayı, imza ve portal işlemleri için kullanıcı oturumu gerekir. Portal kayıtlarının dış bağlantıları doğrulanmış düzenleme kanıtı gerektirir. IIS ve ters proxy erişim günlüklerinde `/f/` yollarındaki bağlantı belirteçlerini ve hassas sorgu dizelerini kaydetmeyin.
+Bu güncelleme SQL şema 7 ile çalışır. Panel HTTPS üzerinden HttpOnly oturum çerezi kullanır. API anahtarıyla çalışan istemciler `/api/v1/auth/permissions` ve atanmış makine işlemlerini kullanabilir. Hesap, fatura onayı, imza ve portal işlemleri için kullanıcı oturumu gerekir. Portal kayıtlarının dış bağlantıları doğrulanmış düzenleme kanıtı gerektirir. IIS ve ters proxy erişim günlüklerinde `/f/` yollarındaki bağlantı belirteçlerini ve hassas sorgu dizelerini kaydetmeyin.
 
-Mevcut şema 4 veritabanında `database/06_Sema5.sql` dosyasını `ALTER ANY SECURITY POLICY` yetkisi olan veritabanı yöneticisi çalıştırır. Betik eksik firma satır güvenliği politikasını aynı işlemde kurar. Kurulumdan sonra `dbo.SchemaInfo` tablosundaki son sürüm 5 ve `dbo.TenantIsolation` politikası etkin olmalıdır.
+Şema 4 için 06 numaralı, şema 5 için 07 numaralı, şema 6 için 08 numaralı yükseltmeden başlayın ve kalan betikleri sırayla çalıştırın. Kurulumdan sonra `dbo.SchemaInfo` tablosundaki son sürüm 7 ve `dbo.TenantIsolation` politikası etkin olmalıdır. Temiz kurulumda `/install`, ilk firmayı, platform yöneticisini ve firma sahibini oluşturur. Kurulum adresi işlem tamamlanınca kapanır. [Kurulum adımları](install.md#tarayıcıdan-ilk-yönetici-kurulumu)
 
 ### Yapılandırma
 
-Varsayılanlar `appsettings.json` dosyasındadır. Ortama özel değişkenlerde bölüm ayırıcı olarak çift alt çizgi kullanın. SQL için güvenilir TLS sertifikası, uygulama havuzu kimliği ve şema 5 gerekir. Kanıt ve Data Protection dizinlerine yalnızca uygulama havuzu kimliği ve yetkili operatörler erişebilmelidir.
+Varsayılanlar `appsettings.json` dosyasındadır. Ortama özel değişkenlerde bölüm ayırıcı olarak çift alt çizgi kullanın. SQL için güvenilir TLS sertifikası, uygulama havuzu kimliği ve şema 7 gerekir. Kanıt ve Data Protection dizinlerine yalnızca uygulama havuzu kimliği ve yetkili operatörler erişebilmelidir.
 
 | Anahtar | Açıklama |
 |---|---|
@@ -435,8 +380,9 @@ Varsayılanlar `appsettings.json` dosyasındadır. Ortama özel değişkenlerde 
 | `Providers:PortalOnly`, `GibPortal:AllowProduction` | Canlı portal yayını için ikisini de `true` yapın. Portal oturumu ve SMS isteği için tek IIS işçi süreci kullanın. |
 | `Ubl:RequireSchemaValidation`, `Ubl:SchemaVersion`, `Ubl:SchemaDirectory`, `Ubl:SchemaSha256` | Onaylı UBL-TR XSD paketi. Dizin özetinde her satır `göreli/yol.xsd:SHA256` biçimindedir. Yollar ordinal sıralanır, özetler büyük harftir, satırlar LF ile birleştirilir ve UTF-8 metne SHA-256 uygulanır. |
 | `Ubl:SchematronPath`, `Ubl:SchematronSha256` | SVRL üreten bağımsız XSLT 1.0 şematron çıktısı ve dosyanın SHA-256 özeti |
-| `ReverseProxy:KnownProxies` | Tek hop için güvenilen proxy IP adresleri. Varsayılan loopback adresleri korunur. |
-| `OutboundNetwork:WebhookHosts`, `OutboundNetwork:SmtpHosts` | Firma tarafından seçilebilecek tam hedef adları. Ağ güvenlik duvarında da yalnızca izinli çıkışları açın. |
+| `ReverseProxy:KnownProxies` | Güvenilen ters vekillerin IP adresleri. IP listeleri boşsa uygulamanın forwarded headers işlemesi kapalıdır. |
+| `ReverseProxy:KnownNetworks` | Uygulamaya doğrudan bağlanan güvenilir ters vekillerin CIDR ağları. Vekilin ilettiği istemci IP adresi, IP erişim denetiminden önce işlenir. |
+| `OutboundNetwork:WebhookHosts`, `OutboundNetwork:SmtpHosts` | Firma tarafından seçilebilecek tam hedef adlarının başlangıç değerleri. Platform yöneticisi listeleri **Ayarlar › Güvenlik › Dış bağlantı izinleri** sayfasından düzenler; kaydedilen liste `App_Data/outbound-network.json` dosyasında tutulur ve yapılandırmanın yerine geçer. |
 | `Messaging:Smtp`, `Messaging:Sms` | Platform geneli varsayılan SMTP ve Netgsm ayarları |
 | `Swagger:Enabled` | API dokümantasyonunun canlı ortamda yayınlanması |
 
@@ -444,15 +390,17 @@ Varsayılanlar `appsettings.json` dosyasındadır. Ortama özel değişkenlerde 
 
 | Dosya | İçerik |
 |---|---|
-| `00_Veritabani.sql` | Yerel `GIBFramework` veritabanını oluşturma ve seçme |
-| `01_Tablolar.sql` | Tablolar ve indeksler |
-| `02_Tetikleyiciler.sql` | Değişiklik ve silme engelleri |
-| `03_SatirGuvenligi.sql` | Temel firma satır güvenliği politikası |
-| `04_BaslangicVerileri.sql` | Şema sürümü, iller, duyurular |
-| `05_VergiDaireleri.sql` | GİB vergi daireleri (860 birim) |
-| `06_Sema5.sql` | Şema 4 → 5 yükseltmesi, eksik RLS kuralları ve kuyruk indeksleri |
-| `GIBFramework_TamKurulum.sql` | Yerel temiz kurulum için birleşik betik |
-| `GIBFramework_Plesk.sql` | Plesk'te seçili boş veritabanına temiz kurulum |
+| `00-Local-Database.sql` | Yerel `GIBFramework` veritabanını oluşturma ve seçme |
+| `01-Users-Tenants-Invoices-Schema.sql` | Tablolar ve indeksler |
+| `02-Invoice-Audit-Protection-Triggers.sql` | Değişiklik ve silme engelleri |
+| `03-Tenant-Row-Security.sql` | Temel firma satır güvenliği politikası |
+| `04-System-Seed-Data.sql` | Şema sürümü, iller, duyurular |
+| `05-Tax-Office-Seed-Data.sql` | GİB vergi daireleri (860 birim) |
+| `06-Upgrade-Schema.sql` | Şema 4 → 5 yükseltmesi, eksik RLS kuralları ve kuyruk indeksleri |
+| `07-Upgrade-Schema.sql` | Şema 5 → 6 yükseltmesi, denetim indeksleri |
+| `08-Upgrade-Schema.sql` | Şema 6 → 7 yükseltmesi, parola sıfırlama talep kuyruğu |
+| `GIBFramework-Local-Install.sql` | Yerel temiz kurulum için birleşik betik |
+| `GIBFramework-Plesk-Install.sql` | Plesk'te seçili boş veritabanına temiz kurulum |
 | `Build-Kurulum.ps1` | Birleşik SQL dosyalarını numaralı kaynaklardan üretir |
 
 Numaralı kurulumda betikleri sırasıyla aynı hedef veritabanında çalıştırın. Yerel temiz kurulumda `00` ile başlayın. Sağlayıcının açtığı boş veritabanında `01` ile başlayın. Bir hata oluştuğunda yürütmeyi durdurun. `sqlcmd` ile çalıştırırken `-b` kullanın. Şema 5 yükseltmesi tek işlemde uygulanır. Uygulama başlangıcında şema sürümü doğrulanır.

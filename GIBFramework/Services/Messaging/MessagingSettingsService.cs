@@ -66,6 +66,26 @@ public sealed record SaveTemplateRequest(
 
 public sealed record EffectiveTemplate(bool Enabled, string? Subject, string Body);
 
+public sealed record SaveCustomTemplateRequest(
+    Guid? Id,
+    [Required, StringLength(100, MinimumLength = 2)] string Name,
+    [Required, StringLength(60)] string Event,
+    [Required, StringLength(20)] string Recipient,
+    [StringLength(320)] string? Address,
+    MessageChannel Channel,
+    bool Enabled,
+    [StringLength(300)] string? Subject,
+    [Required, StringLength(20000)] string Body,
+    bool AttachInvoice);
+
+public sealed record CustomTemplatesView(
+    IReadOnlyList<CustomTemplate> Templates,
+    IReadOnlyList<TemplateVariable> Variables,
+    IReadOnlyList<CodeLabel> Events,
+    IReadOnlyList<CodeLabel> Recipients);
+
+public sealed record CodeLabel(string Code, string Label);
+
 public sealed class MessagingSettingsService(
     ITenantSettingsRepository settings,
     IDataProtectionProvider dataProtection,
@@ -110,7 +130,7 @@ public sealed class MessagingSettingsService(
         }
         else if (request.Enabled && !network.AllowsSmtp(host))
         {
-            errors.Add("SMTP sunucusu izin verilen hedefler arasında değil.");
+            errors.Add("SMTP sunucusu izin verilen hedefler arasında değil. Platform yöneticisi Ayarlar › Güvenlik › Dış bağlantı izinleri sayfasına bu sunucu adını eklemelidir.");
         }
 
         if (request.Enabled && !string.IsNullOrWhiteSpace(request.UserName) && request.Security == SmtpSecurity.None)
@@ -263,6 +283,75 @@ public sealed class MessagingSettingsService(
 
     public async Task ResetTemplateAsync(string key, MessageChannel channel, CancellationToken ct) =>
         await MutateAsync(m => m.Templates.RemoveAll(t => t.Key == key && t.Channel == channel), "MESSAGING_TEMPLATE_RESET", new { key, channel }, ct);
+
+    public async Task<CustomTemplatesView> CustomTemplatesAsync(CancellationToken ct)
+    {
+        var m = await GetAsync(context.RequireTenant(), ct);
+        return new CustomTemplatesView(m.CustomTemplates, TemplateCatalog.CustomVariables,
+            [.. GIBFramework.Services.Invoices.InvoiceEvents.Catalog.Select(e => new CodeLabel(e.Code, e.Label))],
+            [.. TemplateCatalog.CustomRecipients.Select(r => new CodeLabel(r.Code, r.Label))]);
+    }
+
+    public async Task<CustomTemplate> SaveCustomTemplateAsync(SaveCustomTemplateRequest request, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var errors = new List<string>();
+        if (!GIBFramework.Services.Invoices.InvoiceEvents.Catalog.Any(e => e.Code == request.Event))
+            errors.Add("Geçersiz olay.");
+        if (!TemplateCatalog.CustomRecipients.Any(r => r.Code == request.Recipient))
+            errors.Add("Geçersiz alıcı.");
+        var address = request.Address?.Trim();
+        if (request.Recipient == "Address")
+        {
+            if (request.Channel == MessageChannel.Email ? !IsEmail(address) : NetgsmClient.NormalizePhone(address) is null)
+                errors.Add(request.Channel == MessageChannel.Email ? "Geçerli bir e-posta adresi girin." : "Geçerli bir cep telefonu girin.");
+        }
+        else
+        {
+            address = null;
+        }
+
+        var unknown = TemplateRenderer.UnknownVariables((request.Subject ?? string.Empty) + " " + request.Body, TemplateCatalog.CustomVariables.Select(v => v.Name));
+        errors.AddRange(unknown.Select(u => $"Tanımsız değişken: {{{{{u}}}}}"));
+        if (request.Channel == MessageChannel.Email && string.IsNullOrWhiteSpace(request.Subject))
+            errors.Add("E-posta konusu zorunludur.");
+        if (request.Channel == MessageChannel.Sms && request.Body.Length > 883)
+            errors.Add("SMS metni en fazla 883 karakter olabilir.");
+        if (string.IsNullOrWhiteSpace(request.Body))
+            errors.Add("İçerik zorunludur.");
+        Fail(errors);
+
+        var template = new CustomTemplate
+        {
+            Id = request.Id is { } id && id != Guid.Empty ? id : Guid.CreateVersion7(clock.UtcNow),
+            Name = request.Name.Trim(),
+            Event = request.Event,
+            Recipient = request.Recipient,
+            Address = address,
+            Channel = request.Channel,
+            Enabled = request.Enabled,
+            Subject = request.Channel == MessageChannel.Email ? request.Subject?.Trim() : null,
+            Body = request.Body,
+            AttachInvoice = request.Channel == MessageChannel.Email && request.AttachInvoice,
+        };
+        await MutateAsync(m =>
+        {
+            if (request.Id is { } existing && existing != Guid.Empty && m.CustomTemplates.All(t => t.Id != existing))
+                throw new NotFoundException("Şablon bulunamadı.");
+            if (m.CustomTemplates.Count(t => t.Id != template.Id) >= 100)
+                throw new ValidationFailedException("TEMPLATE_LIMIT", "En fazla 100 özel şablon oluşturulabilir.", []);
+            var index = m.CustomTemplates.FindIndex(t => t.Id == template.Id);
+            if (index >= 0) m.CustomTemplates[index] = template;
+            else m.CustomTemplates.Add(template);
+        }, request.Id is null ? "MESSAGING_CUSTOM_TEMPLATE_CREATED" : "MESSAGING_CUSTOM_TEMPLATE_UPDATED", new { template.Id, template.Name, template.Event, template.Channel }, ct);
+        return template;
+    }
+
+    public async Task DeleteCustomTemplateAsync(Guid id, CancellationToken ct) =>
+        await MutateAsync(m =>
+        {
+            if (m.CustomTemplates.RemoveAll(t => t.Id == id) == 0) throw new NotFoundException("Şablon bulunamadı.");
+        }, "MESSAGING_CUSTOM_TEMPLATE_DELETED", new { id }, ct);
 
     public static EffectiveTemplate Effective(MessagingSettings settings, TemplateDefinition def, MessageChannel channel)
     {

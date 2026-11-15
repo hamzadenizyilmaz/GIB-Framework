@@ -16,6 +16,8 @@ public interface ITenantRepository
 
     Task UpdateAsync(Tenant tenant, CancellationToken cancellationToken);
 
+    Task<bool> HasIssuedInvoicesAsync(Guid tenantId, CancellationToken cancellationToken);
+
     Task<IReadOnlyList<SequenceInfo>> SequencesAsync(Guid tenantId, CancellationToken cancellationToken);
 }
 
@@ -27,10 +29,15 @@ public sealed class TenantRepository(SqlConnectionFactory connections) : ITenant
     {
         ArgumentNullException.ThrowIfNull(tenant);
         await using var connection = await connections.OpenSystemAsync(cancellationToken);
+        await CreateCoreAsync(tenant, connection, null, cancellationToken);
+    }
+
+    internal static async Task CreateCoreAsync(Tenant tenant, SqlConnection connection, SqlTransaction? transaction, CancellationToken cancellationToken)
+    {
         await using var cmd = connection.Command("""
             INSERT dbo.Tenants (Id, Name, TaxId, ProfileJson, EFaturaPrefix, EArsivPrefix, IsActive, CreatedAt)
             VALUES (@id, @n, @tax, @p, @ef, @ea, @a, @c)
-            """);
+            """, transaction);
         cmd.With("@id", tenant.Id).With("@n", tenant.Name).With("@tax", tenant.Profile.TaxId).WithMax("@p", JsonDefaults.Serialize(tenant.Profile))
             .With("@ef", tenant.EFaturaPrefix).With("@ea", tenant.EArsivPrefix).With("@a", tenant.IsActive).With("@c", tenant.CreatedAt);
         try
@@ -59,16 +66,33 @@ public sealed class TenantRepository(SqlConnectionFactory connections) : ITenant
         return await ReadAsync(cmd, cancellationToken);
     }
 
+    public async Task<bool> HasIssuedInvoicesAsync(Guid tenantId, CancellationToken cancellationToken)
+    {
+        await using var connection = await connections.OpenSystemAsync(cancellationToken);
+        await using var cmd = connection.Command("SELECT CASE WHEN EXISTS (SELECT 1 FROM dbo.Invoices WHERE TenantId = @t AND DocumentNumber IS NOT NULL) THEN 1 ELSE 0 END");
+        return Convert.ToInt32(await cmd.With("@t", tenantId).ExecuteScalarAsync(cancellationToken), System.Globalization.CultureInfo.InvariantCulture) == 1;
+    }
+
     public async Task UpdateAsync(Tenant tenant, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(tenant);
         await using var connection = await connections.OpenSystemAsync(cancellationToken);
         await using var cmd = connection.Command("""
-            UPDATE dbo.Tenants SET Name = @n, ProfileJson = @p, EFaturaPrefix = @ef, EArsivPrefix = @ea WHERE Id = @id
+            UPDATE dbo.Tenants SET Name = @n, TaxId = @tax, ProfileJson = @p, EFaturaPrefix = @ef, EArsivPrefix = @ea WHERE Id = @id
             """);
-        cmd.With("@id", tenant.Id).With("@n", tenant.Name).WithMax("@p", JsonDefaults.Serialize(tenant.Profile))
+        cmd.With("@id", tenant.Id).With("@n", tenant.Name).With("@tax", tenant.Profile.TaxId).WithMax("@p", JsonDefaults.Serialize(tenant.Profile))
             .With("@ef", tenant.EFaturaPrefix).With("@ea", tenant.EArsivPrefix);
-        if (await cmd.ExecuteNonQueryAsync(cancellationToken) != 1)
+        int updated;
+        try
+        {
+            updated = await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+        catch (SqlException ex) when (ex.Number is UniqueViolation or 2601)
+        {
+            throw new ConflictException("TENANT_EXISTS", $"{tenant.Profile.TaxId} VKN/TCKN'li başka bir firma zaten kayıtlı.");
+        }
+
+        if (updated != 1)
         {
             throw new NotFoundException("Firma bulunamadı.");
         }

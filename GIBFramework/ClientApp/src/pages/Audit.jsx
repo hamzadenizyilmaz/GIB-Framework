@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { fmtDate, ROLE_LABELS } from '../format.js';
 import { BusyButton, Card, Empty, ErrorAlert, PageHeader, Spinner, useDialogs } from '../components/ui.jsx';
@@ -8,7 +8,9 @@ const TAKE = 100;
 
 export function Audit() {
   const dialogs = useDialogs();
-  const tenantId = useSession().tenant?.id;
+  const session = useSession();
+  const tenant = session.tenant;
+  const [platform, setPlatform] = useState(false);
   const [entityId, setEntityId] = useState('');
   const [userId, setUserId] = useState('');
   const [action, setAction] = useState('');
@@ -21,29 +23,38 @@ export function Audit() {
   const [hasMore, setHasMore] = useState(false);
   const [verify, setVerify] = useState(null);
   const [error, setError] = useState(null);
+  const request = useRef(0);
 
   const load = useCallback(async (append, current) => {
+    const id = ++request.current;
     const q = new URLSearchParams({ take: String(TAKE) });
+    if (platform) q.set('platform', 'true');
     for (const [key, value] of Object.entries(filter)) if (value) q.set(key, value);
     if (append && current?.length) q.set('before', String(current[current.length - 1].sequence));
     const page = await api.get(`/api/v1/audit/events?${q}`);
+    if (request.current !== id) return;
     setRows(append ? [...current, ...page] : page);
     setHasMore(page.length === TAKE);
     setError(null);
-  }, [filter]);
+  }, [filter, platform]);
 
   useEffect(() => {
     setRows(null);
+    setHasMore(false);
     setVerify(null);
-    load(false).catch(setError);
-  }, [load, tenantId]);
+    setError(null);
+    const pending = load(false);
+    const id = request.current;
+    pending.catch((failure) => { if (request.current === id) setError(failure); });
+    return () => { ++request.current; };
+  }, [load, tenant?.id]);
 
   return (
     <>
       <PageHeader breadcrumb={[[ 'Ayarlar', '/settings' ], [ 'Denetim izi' ]]} icon="shield-check" title="Denetim izi" subtitle="İşlem kayıtları ve hash zinciri doğrulaması" />
 
       <Card title="Zincir bütünlüğü" className="mb-4" actions={(
-        <BusyButton className="btn btn-outline-primary" onClick={async () => setVerify(await api.get('/api/v1/audit/verify'))}>
+        <BusyButton className="btn btn-outline-primary" onClick={async () => setVerify(await api.get(`/api/v1/audit/verify?platform=${platform}`))}>
           <i className="bi bi-link-45deg" aria-hidden="true" />Hash zincirini doğrula
         </BusyButton>
       )}>
@@ -54,6 +65,13 @@ export function Audit() {
       </Card>
 
       <Card title="Denetim günlükleri" footer={hasMore && <BusyButton className="btn btn-sm btn-outline-secondary" onClick={() => load(true, rows)}>Daha eski kayıtlar</BusyButton>}>
+        {session.hasRole('PlatformSuperAdmin') && tenant && <div className="mb-3">
+          <label className="form-label" htmlFor="audit-scope">Kayıt kaynağı</label>
+          <select className="form-select w-auto mw-100" id="audit-scope" value={platform ? 'platform' : 'tenant'} onChange={(e) => setPlatform(e.target.value === 'platform')}>
+            <option value="tenant">{tenant.name || 'Seçili firma'}</option>
+            <option value="platform">Platform</option>
+          </select>
+        </div>}
         <form className="row g-2 mb-3" onSubmit={(event) => {
           event.preventDefault();
           setFilter({
@@ -86,13 +104,17 @@ export function Audit() {
                     <td className="mono">{e.sequence}</td>
                     <td className="small">{fmtDate(e.timestampUtc)}</td>
                     <td className="small">{e.userId || '—'} <span className="text-body-secondary">({e.actorType})</span></td>
-                    <td className="mono small">{e.action}</td>
+                    <td className="small"><span className="mono">{e.action}</span>{auditOperation(e.dataJson) && <div>{auditOperation(e.dataJson)}</div>}</td>
                     <td className="small">{e.entityType} <span className="mono">{(e.entityId || '').slice(0, 13)}</span></td>
                     <td>{e.result === 'Success' ? <span className="badge text-bg-success">Başarılı</span> : <span className="badge text-bg-danger" title={e.failureReason || ''}>Hata</span>}</td>
                     <td className="mono small">{e.hash.slice(0, 12)}…</td>
                     <td><button className="btn btn-sm btn-outline-secondary" type="button" onClick={() => dialogs.show('Denetim kaydı', (
                       <dl className="mb-0">
                         <dt>Kayıt kimliği</dt><dd className="text-break">{e.entityId || '—'}</dd>
+                        <dt>Firma</dt><dd className="text-break">{e.tenantId === '00000000-0000-0000-0000-000000000000' ? 'Platform' : tenant?.name || e.tenantId}</dd>
+                        <dt>İşlemi yapan</dt><dd>{e.userId || e.entityId || '—'} · {e.actorType}</dd>
+                        <dt>İşlem anındaki roller</dt><dd>{auditData(e.dataJson)?.actorRoles?.map((item) => ROLE_LABELS[item] || item).join(', ') || '—'}</dd>
+                        {e.failureReason && <><dt>Hata nedeni</dt><dd>{e.failureReason}</dd></>}
                         <dt>IP adresi</dt><dd>{e.ip || '—'}</dd>
                         <dt>İz kimliği</dt><dd className="text-break">{e.traceId || e.correlationId || '—'}</dd>
                         <dt>İşlem verisi</dt><dd><pre className="text-wrap text-break mb-0">{formatAuditData(e.dataJson)}</pre></dd>
@@ -112,4 +134,14 @@ export function Audit() {
 function formatAuditData(value) {
   try { return value ? JSON.stringify(JSON.parse(value), null, 2) : '—'; }
   catch { return value; }
+}
+
+function auditData(value) {
+  try { return JSON.parse(value || 'null'); } catch { return null; }
+}
+
+function auditOperation(value) {
+  const data = auditData(value);
+  const details = data?.details || data;
+  return details?.method && details?.route ? `${details.method} ${details.route}` : '';
 }

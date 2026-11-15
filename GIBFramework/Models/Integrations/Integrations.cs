@@ -111,7 +111,8 @@ public sealed record InboundOrder(
     bool PricesIncludeTax,
     InboundCustomer Customer,
     IReadOnlyList<InboundLine> Lines,
-    IReadOnlyList<string> Notes);
+    IReadOnlyList<string> Notes,
+    decimal? ExpectedTotal = null);
 
 public sealed record InboundCustomer(
     string? TaxId,
@@ -124,6 +125,8 @@ public sealed record InboundCustomer(
     string? District,
     string? City,
     string? PostalCode,
-    string? Country);
+    string? Country,
+    bool? EFaturaRegistered = null,
+    string? Alias = null);
 
 public sealed record InboundLine(string Name, decimal Quantity, decimal UnitPrice, decimal VatRate, decimal Discount, string? UnitCode);

@@ -126,7 +126,7 @@ public static class IntegrationCatalog
                 "Sayfada gösterilen imza anahtarını \"Webhook imzalama anahtarı\" alanına kaydedin.",
             ]),
         new(IntegrationKind.Whmcs, "WHMCS", "Hosting faturalama", "hdd-network",
-            "WHMCS'te ödenen faturalar (InvoicePaid) için e-Arşiv / e-Fatura otomatik oluşturulur.",
+            "WHMCS'te ödenen uygun TL faturaları GIB Framework'e fatura taslağı olarak aktarılır.",
             true, "X-GibFramework-Signature",
             [
                 new(SigningSecret, "İmza anahtarı", "generated", true, null, "Kanca dosyasına otomatik eklenir."),
@@ -134,19 +134,19 @@ public static class IntegrationCatalog
                 Auto, Save, Vat, Outbound,
             ],
             [
-                "Aşağıdaki kanca dosyasını indirip WHMCS kurulumunuzda includes/hooks/gibframework.php olarak kaydedin.",
+                "Entegrasyonu etkinleştirip kaydedin. Ardından kanca dosyasını WHMCS kurulumunuzda includes/hooks/gibframework.php olarak kaydedin.",
                 "WHMCS bir faturayı \"Ödendi\" yaptığında fatura satırları ve müşteri bilgileri imzalı olarak GIB Framework'e gönderilir.",
-                "Gelen istekler bu sayfadaki kayıtlarda görünür.",
+                "Döviz, ikinci vergi veya indirimli faturalar için WHMCS eklentisini ve işlem günlüklerini kullanın.",
             ]),
         new(IntegrationKind.WiseCp, "WISECP", "Hosting faturalama", "hdd-stack",
-            "WISECP'te fatura \"ödendi\" durumuna geçtiğinde e-Arşiv / e-Fatura otomatik oluşturulur.",
+            "WISECP'te ödenen ve tutarı doğrulanan TL faturaları fatura taslağı olarak aktarılır.",
             true, "X-GibFramework-Signature",
             [
                 new(SigningSecret, "İmza anahtarı", "generated", true, null, "Kanca dosyasına otomatik eklenir."),
                 Auto, Save, Vat, Outbound,
             ],
             [
-                "Aşağıdaki kanca dosyasını indirip WISECP kurulumunuzda coremio/hooks/gibframework.php olarak kaydedin.",
+                "Entegrasyonu etkinleştirip kaydedin. İndirilen hooks.php dosyasını kurulu WISECP eklentinizin coremio/modules/Addons/{Ad}/ dizinine ekleyin.",
                 "Kanca, action:invoice.status_changed olayında fatura \"paid\" durumuna geçtiğinde çalışır.",
                 "Gelen istekler bu sayfadaki kayıtlarda görünür.",
             ]),

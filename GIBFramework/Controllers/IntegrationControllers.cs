@@ -136,9 +136,11 @@ public sealed class IntegrationsController(IntegrationService integrations) : Co
         StatusCode(StatusCodes.Status201Created, await integrations.CreateAsync(request, ct));
 
     [HttpPut("{id:guid}")]
+    [HttpPost("{id:guid}/update")]
     public async Task<IntegrationView> Update(Guid id, [FromBody] SaveIntegrationRequest request, CancellationToken ct) => await integrations.UpdateAsync(id, request, ct);
 
     [HttpDelete("{id:guid}")]
+    [HttpPost("{id:guid}/delete")]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
         await integrations.DeleteAsync(id, ct);
@@ -178,9 +180,7 @@ public sealed class HooksController(IntegrationService integrations) : Controlle
     [RawBody]
     public async Task<IActionResult> Receive(Guid id, CancellationToken ct)
     {
-        using var ms = new MemoryStream();
-        await Request.Body.CopyToAsync(ms, ct);
-        var result = await integrations.ReceiveAsync(id, ms.ToArray(), Request.Headers, ct);
+        var result = await integrations.ReceiveAsync(id, Request.Body, Request.ContentLength, Request.Headers, ct);
         return StatusCode(result.StatusCode, result.Body);
     }
 }
@@ -197,13 +197,14 @@ public sealed class PublicInvoiceController(InvoiceDocumentService documents, IA
     [EnableRateLimiting(RateLimitPolicy)]
     public async Task<IActionResult> View(string token, CancellationToken ct)
     {
+        Response.Headers.CacheControl = "private, no-store";
+        Response.Headers.ContentSecurityPolicy = InvoiceDocumentService.PreviewPolicy + "; frame-ancestors 'none'";
         var invoice = await ResolveAsync(token, ct);
         if (invoice is null)
         {
             return new ContentResult { Content = NotFoundPage, ContentType = "text/html; charset=utf-8", StatusCode = StatusCodes.Status404NotFound };
         }
 
-        Response.Headers.CacheControl = "private, no-store";
         Response.Headers["X-Robots-Tag"] = "noindex, nofollow";
         await audit.AppendSystemAsync(invoice.TenantId, new AuditEntry("INVOICE_LINK_VIEWED", "Invoice", invoice.Id.ToString()), null, ct);
         return Content(await documents.RenderHtmlAsync(invoice, publicView: true, token, ct), "text/html; charset=utf-8", Encoding.UTF8);
@@ -242,7 +243,7 @@ public sealed class PublicInvoiceController(InvoiceDocumentService documents, IA
 
     private async Task<Invoice?> ResolveAsync(string token, CancellationToken ct)
     {
-        if (token.Length is > 20 and < 1000 && documents.ReadToken(token) is { } ids
+        if (documents.ReadToken(token) is { } ids
             && await documents.LoadAsync(ids.TenantId, ids.InvoiceId, ct) is { } invoice
             && await documents.HasShareableEvidenceAsync(invoice, ct))
         {

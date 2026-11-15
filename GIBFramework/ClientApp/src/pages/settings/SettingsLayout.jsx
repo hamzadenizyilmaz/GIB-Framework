@@ -54,6 +54,7 @@ export const SETTINGS = [
       { to: '/settings/account', icon: 'person-lock', label: 'Hesabım ve 2FA', text: 'Şifre, iki adımlı doğrulama, oturumlar' },
       { to: '/settings/security', icon: 'shield-lock', label: 'Güvenlik politikası', text: '2FA, oturum ve ağ erişimi', policy: 'SecurityManage' },
       { to: '/settings/security/ip-access', icon: 'shield', label: 'IP Erişimi', text: 'IP adresleri ve ağ erişim kuralları', policy: 'IpAccessManage' },
+      { to: '/settings/security/outbound-network', icon: 'globe2', label: 'Dış bağlantı izinleri', text: 'Webhook ve SMTP için izinli sunucular', policy: 'PlatformAdmin' },
       { to: '/settings/audit', icon: 'shield-check', label: 'Denetim izi', text: 'Hash zincirli işlem kayıtları', policy: 'AuditRead' },
     ],
   },

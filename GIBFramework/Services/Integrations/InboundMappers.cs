@@ -89,7 +89,7 @@ public static class InboundMappers
             notes.Add(note);
         }
 
-        return new MapResult(new InboundOrder(id, number, Str(o, "currency") ?? "TRY", false, customer, lines, notes), null);
+        return new MapResult(new InboundOrder(id, number, Str(o, "currency") ?? "TRY", false, customer, lines, notes, OptionalAmount(o, "total")), null);
     }
 
     public static MapResult Shopify(Integration integration, JsonElement o, string? topic)
@@ -100,7 +100,9 @@ public static class InboundMappers
             return MapResult.Ignore($"Shopify konusu \"{topic}\" faturalanmıyor.");
         }
 
-        if (topic?.Equals("orders/create", StringComparison.OrdinalIgnoreCase) == true && Str(o, "financial_status") is not ("paid" or null))
+        var financialStatus = Str(o, "financial_status");
+        if (financialStatus is not "paid"
+            && (financialStatus is not null || !string.Equals(topic, "orders/paid", StringComparison.OrdinalIgnoreCase)))
         {
             return MapResult.Ignore("Sipariş henüz ödenmedi.");
         }
@@ -133,12 +135,13 @@ public static class InboundMappers
                 rate = DefaultRate(integration);
             }
 
-            lines.Add(new InboundLine(Str(l, "title") ?? Str(l, "name") ?? "Ürün", Dec(l, "quantity", 1), Dec(l, "price"), Snap(rate), Dec(l, "total_discount"), null));
+            var discount = ShopifyDiscount(l);
+            lines.Add(new InboundLine(Str(l, "title") ?? Str(l, "name") ?? "Ürün", Dec(l, "quantity", 1), Dec(l, "price"), Snap(rate), discount, null));
         }
 
         foreach (var s in Arr(o, "shipping_lines"))
         {
-            var price = Dec(s, "price");
+            var price = OptionalAmount(s, "discounted_price") ?? Dec(s, "price") - ShopifyDiscount(s);
             if (price > 0)
             {
                 var rate = Arr(s, "tax_lines").Select(t => Dec(t, "rate")).FirstOrDefault() * 100;
@@ -147,7 +150,8 @@ public static class InboundMappers
         }
 
         var name = Str(o, "name") ?? Str(o, "order_number") ?? id;
-        return new MapResult(new InboundOrder(id, name.TrimStart('#'), Str(o, "currency") ?? "TRY", included, customer, lines, [$"Shopify sipariş no: {name}"]), null);
+        return new MapResult(new InboundOrder(id, name.TrimStart('#'), Str(o, "currency") ?? "TRY", included, customer, lines,
+            [$"Shopify sipariş no: {name}"], OptionalAmount(o, "total_price")), null);
     }
 
     public static MapResult Generic(Integration integration, JsonElement o)
@@ -162,14 +166,18 @@ public static class InboundMappers
         var c = Obj(o, "customer");
         var customer = new InboundCustomer(
             Str(c, "taxId"), Str(c, "name"), Str(c, "company"), Str(c, "taxOffice"), Str(c, "email"), Str(c, "phone"),
-            Str(c, "address"), Str(c, "district"), Str(c, "city"), Str(c, "postalCode"), Str(c, "country"));
-        var lines = Arr(o, "lines").Select(l => new InboundLine(
-            Str(l, "name") ?? "Hizmet",
-            Dec(l, "quantity", 1),
-            Dec(l, "unitPrice"),
-            l.TryGetProperty("vatRate", out _) ? Snap(Dec(l, "vatRate")) : DefaultRate(integration),
-            Dec(l, "discount"),
-            Str(l, "unitCode"))).ToList();
+            Str(c, "address"), Str(c, "district"), Str(c, "city"), Str(c, "postalCode"), Str(c, "country"),
+            Str(c, "eFaturaRegistered") is null ? null : Bool(c, "eFaturaRegistered"), Str(c, "alias"));
+        var lines = new List<InboundLine>();
+        foreach (var line in Arr(o, "lines"))
+        {
+            var price = OptionalAmount(line, "unitPrice") ?? throw Invalid("Satır birim fiyatı zorunludur.");
+            var quantity = Dec(line, "quantity", 1);
+            var vatRate = Dec(line, "vatRate", DefaultRate(integration));
+            if (quantity <= 0 || vatRate != Snap(vatRate))
+                throw Invalid("Satır miktarı pozitif ve KDV oranı desteklenen bir değer olmalıdır.");
+            lines.Add(new InboundLine(Str(line, "name") ?? "Hizmet", quantity, price, vatRate, Dec(line, "discount"), Str(line, "unitCode")));
+        }
         var notes = Arr(o, "notes").Select(n => n.ToString()).Where(n => n.Length > 0).ToList();
         var label = integration.Kind switch
         {
@@ -179,13 +187,20 @@ public static class InboundMappers
         };
         var number = Str(o, "orderNumber") ?? id;
         notes.Insert(0, $"{label}: {number}");
-        return new MapResult(new InboundOrder(id, number, Str(o, "currency") ?? "TRY", Bool(o, "pricesIncludeTax"), customer, lines, notes), null);
+        return new MapResult(new InboundOrder(id, number, Str(o, "currency") ?? "TRY", Bool(o, "pricesIncludeTax"), customer, lines, notes,
+            OptionalAmount(o, "expectedTotal")), null);
     }
 
     public static decimal Snap(decimal rate)
     {
         decimal[] allowed = [0, 1, 8, 10, 18, 20];
         return allowed.OrderBy(a => Math.Abs(a - rate)).First();
+    }
+
+    private static decimal ShopifyDiscount(JsonElement line)
+    {
+        var allocations = Arr(line, "discount_allocations").ToArray();
+        return allocations.Length == 0 ? Dec(line, "total_discount") : allocations.Sum(a => Dec(a, "amount"));
     }
 
     private static decimal DefaultRate(Integration integration) =>
@@ -230,5 +245,15 @@ public static class InboundMappers
         Str(e, name) is { } s && (s.Equals("true", StringComparison.OrdinalIgnoreCase) || s == "1");
 
     private static decimal Dec(JsonElement e, string name, decimal fallback = 0) =>
-        Str(e, name) is { } s && decimal.TryParse(s, NumberStyles.Number, CultureInfo.InvariantCulture, out var d) ? d : fallback;
+        OptionalAmount(e, name) ?? fallback;
+
+    private static decimal? OptionalAmount(JsonElement e, string name)
+    {
+        if (e.ValueKind != JsonValueKind.Object || !e.TryGetProperty(name, out var raw) || raw.ValueKind == JsonValueKind.Null)
+            return null;
+        if (Str(e, name) is { } s && decimal.TryParse(s, NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint,
+            CultureInfo.InvariantCulture, out var value))
+            return value;
+        throw Invalid($"{name} alanı geçerli bir sayı olmalıdır.");
+    }
 }

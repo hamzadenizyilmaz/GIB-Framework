@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, LOGO_EVENT } from '../../api.js';
 import { useSession } from '../../session.jsx';
+import { useTenantLogo } from '../../components/useTenantLogo.js';
 import { LocationPicker } from '../../components/inputs.jsx';
 import { BusyButton, Card, ErrorAlert, useDialogs, useLoad, useToast } from '../../components/ui.jsx';
 import { SettingsLayout, TenantRequired } from './SettingsLayout.jsx';
@@ -10,6 +11,8 @@ const REGIMES = [['Bilanco', 'Bilanço esası'], ['IsletmeHesabi', 'İşletme he
 function LogoCard({ canEdit }) {
   const toast = useToast();
   const dialogs = useDialogs();
+  const session = useSession();
+  const logoUrl = useTenantLogo(session.tenant?.id);
   const fileRef = useRef(null);
   const [error, setError] = useState(null);
   const { data: info, reload } = useLoad(() => api.get('/api/v1/tenants/current/logo-info'), []);
@@ -22,7 +25,7 @@ function LogoCard({ canEdit }) {
     <Card title="Logo" icon="image" className="mb-4">
       <ErrorAlert error={error} />
       <div className="d-flex flex-wrap align-items-center gap-4">
-        <div className="logo-preview">{info?.hasLogo ? <img src={info.url} alt="Firma logosu" /> : <i className="bi bi-image fs-1 text-body-tertiary" />}</div>
+        <div className="logo-preview">{logoUrl ? <img src={logoUrl} alt="Firma logosu" /> : <i className="bi bi-image fs-1 text-body-tertiary" />}</div>
         <div>
           <div className="small text-body-secondary mb-2">PNG, JPEG veya WebP · en fazla 512 KB. Faturada, e-postalarda ve üst menüde görünür.</div>
           {canEdit && (
@@ -78,6 +81,8 @@ function CompanyForm() {
       email: p.email || '', phone: p.phone || '', isEFaturaRegistered: !!p.isEFaturaRegistered, isEArchiveRegistered: !!p.isEArchiveRegistered,
       fax: p.fax || '', website: p.website || '', tradeRegistryNumber: p.tradeRegistryNumber || '', mersisNumber: p.mersisNumber || '',
       eFaturaPrefix: t.eFaturaPrefix || 'EFT', eArsivPrefix: t.eArsivPrefix || 'EAR',
+      taxId: p.taxId || '', kind: p.kind || ((p.taxId || '').length === 11 ? 'NaturalPerson' : 'LegalEntity'),
+      firstName: p.firstName || '', familyName: p.familyName || '', country: p.country || 'Türkiye', alias: p.alias || '',
     });
   }, [t]);
 
@@ -92,7 +97,7 @@ function CompanyForm() {
       return;
     }
     try {
-      await api.put('/api/v1/tenants/current', { ...form, email: form.email || null });
+      await api.put('/api/v1/tenants/current', { ...form, email: form.email || null, firstName: form.kind === 'NaturalPerson' ? form.firstName : '', familyName: form.kind === 'NaturalPerson' ? form.familyName : '' });
       await session.reload();
       setError(null);
       toast('Firma profili kaydedildi.');
@@ -112,8 +117,23 @@ function CompanyForm() {
             <div className="row g-3">
               <div className="col-md-4">
                 <label className="form-label" htmlFor="c-tax">VKN / TCKN</label>
-                <input className="form-control font-monospace" id="c-tax" value={t.profile?.taxId || ''} disabled readOnly />
+                <input className="form-control font-monospace" id="c-tax" required inputMode="numeric" pattern="[0-9]{10,11}" maxLength={11} value={form.taxId}
+                  onChange={(e) => { const v = e.target.value.replace(/\D/g, '').slice(0, 11); setForm((f) => ({ ...f, taxId: v, kind: v.length === 11 ? 'NaturalPerson' : v.length === 10 ? 'LegalEntity' : f.kind })); }} />
+                <div className="form-text">Numara almış fatura varsa değiştirilemez.</div>
               </div>
+              <div className="col-md-4">
+                <label className="form-label" htmlFor="c-kind">Mükellef türü</label>
+                <select className="form-select" id="c-kind" value={form.kind} onChange={set('kind')}>
+                  <option value="LegalEntity">Tüzel kişi (şirket, VKN)</option>
+                  <option value="NaturalPerson">Gerçek kişi (şahıs, TCKN)</option>
+                </select>
+              </div>
+              {form.kind === 'NaturalPerson' ? (
+                <>
+                  <div className="col-md-2"><label className="form-label" htmlFor="c-first">Ad</label><input className="form-control" id="c-first" required maxLength={100} value={form.firstName} onChange={set('firstName')} /></div>
+                  <div className="col-md-2"><label className="form-label" htmlFor="c-family">Soyad</label><input className="form-control" id="c-family" required maxLength={100} value={form.familyName} onChange={set('familyName')} /></div>
+                </>
+              ) : <div className="col-md-4 d-none d-md-block" />}
               <div className="col-md-8"><label className="form-label" htmlFor="c-name">Firma adı</label><input className="form-control" id="c-name" required maxLength={250} value={form.name} onChange={set('name')} /></div>
               <div className="col-md-8"><label className="form-label" htmlFor="c-title">Ticaret unvanı</label><input className="form-control" id="c-title" required maxLength={250} value={form.title} onChange={set('title')} /></div>
               <div className="col-md-4">
@@ -133,8 +153,9 @@ function CompanyForm() {
             <LocationPicker value={{ city: form.city, district: form.district, neighborhood: form.neighborhood }}
               onChange={(v) => setForm((f) => ({ ...f, city: v.city, district: v.district, neighborhood: v.neighborhood }))} />
             <div className="row g-3 mt-0">
-              <div className="col-md-7"><label className="form-label" htmlFor="c-street">Cadde / sokak</label><input className="form-control" id="c-street" maxLength={250} value={form.street} onChange={set('street')} /></div>
+              <div className="col-md-4"><label className="form-label" htmlFor="c-street">Cadde / sokak</label><input className="form-control" id="c-street" maxLength={250} value={form.street} onChange={set('street')} /></div>
               <div className="col-md-2"><label className="form-label" htmlFor="c-no">No</label><input className="form-control" id="c-no" maxLength={20} value={form.buildingNumber} onChange={set('buildingNumber')} /></div>
+              <div className="col-md-3"><label className="form-label" htmlFor="c-country">Ülke</label><input className="form-control" id="c-country" required maxLength={100} value={form.country} onChange={set('country')} /></div>
               <div className="col-md-3"><label className="form-label" htmlFor="c-pk">Posta kodu</label><input className="form-control" id="c-pk" inputMode="numeric" maxLength={5} value={form.postalCode} onChange={(e) => setForm((f) => ({ ...f, postalCode: e.target.value.replace(/\D/g, '').slice(0, 5) }))} /></div>
             </div>
           </Card>
@@ -153,6 +174,9 @@ function CompanyForm() {
                 </div>
               </div>
               <div className="col-sm-6"><label className="form-label" htmlFor="c-pef">e-Fatura serisi</label><input className="form-control font-monospace" id="c-pef" required pattern="[A-Z0-9]{3}" value={form.eFaturaPrefix} onChange={prefix('eFaturaPrefix')} /></div>
+              <div className="col-12"><label className="form-label" htmlFor="c-alias">e-Fatura gönderici birim etiketi (GB)</label>
+                <input className="form-control font-monospace" id="c-alias" maxLength={200} placeholder="urn:mail:defaultgb@alanadi.com" value={form.alias} onChange={set('alias')} />
+                <div className="form-text">Entegratörünüzün verdiği gönderici posta kutusu etiketi. Boş bırakılabilir.</div></div>
               <div className="col-sm-6"><label className="form-label" htmlFor="c-pea">e-Arşiv serisi</label><input className="form-control font-monospace" id="c-pea" required pattern="[A-Z0-9]{3}" value={form.eArsivPrefix} onChange={prefix('eArsivPrefix')} /></div>
             </div>
           </Card>

@@ -1,6 +1,7 @@
+import { HtmlPreview } from '../components/HtmlPreview.jsx';
 import { useNavigate, useParams } from 'react-router';
 import { api, download } from '../api.js';
-import { fmtDate, fmtMoney, fmtNumber, STATUS, todayIso, UNITS } from '../format.js';
+import { actorLabel, fmtDate, fmtMoney, fmtNumber, parseIssues, STATUS, todayIso, UNITS } from '../format.js';
 import { useSession } from '../session.jsx';
 import {
   BusyButton, Card, DocTypeBadge, ErrorAlert, PageHeader, Spinner, StatusBadge, useDialogs, useLoad, useToast,
@@ -135,7 +136,7 @@ export function InvoiceDetail() {
   const base = `/api/v1/invoices/${i.id}`;
   const portal = `/api/v1/gib-portal/invoices/${i.id}`;
 
-  const showHtml = async (content) => dialogs.show('GİB görünümü', <iframe className="preview-frame" sandbox="" title="Fatura önizleme" srcDoc={content} />, 'xl');
+  const showHtml = async (content) => dialogs.show('GİB görünümü', <HtmlPreview className="preview-frame" title="Fatura önizleme" html={content} />, 'xl');
 
   const run = async (action) => {
     switch (action) {
@@ -275,7 +276,7 @@ export function InvoiceDetail() {
 
   const showInvoice = async () => {
     const content = await api.text(`${base}/preview`);
-    await dialogs.show('Fatura', <iframe className="preview-frame" sandbox="" title="Fatura" srcDoc={content} />, 'xl');
+    await dialogs.show('Fatura', <HtmlPreview className="preview-frame" title="Fatura" html={content} />, 'xl');
   };
 
   const share = async () => {
@@ -327,7 +328,21 @@ export function InvoiceDetail() {
         )}
       />
 
-      {i.lastError && <div className="alert alert-warning"><i className="bi bi-exclamation-triangle me-1" />{i.lastError}</div>}
+      {i.lastError && (
+        <div className="alert alert-warning" role="alert">
+          <div className="fw-semibold mb-2"><i className="bi bi-exclamation-triangle me-2" />Fatura düzenlenemiyor</div>
+          <ul className="mb-0 ps-3 d-grid gap-2">
+            {parseIssues(i.lastError).map((issue, index) => (
+              <li key={index}>
+                {issue.title && <strong className="d-block">{issue.title}</strong>}
+                <span>{issue.message}</span>
+                {issue.hint && <span className="d-block small mt-1 opacity-75"><i className="bi bi-lightbulb me-1" />{issue.hint}</span>}
+                {issue.code && <code className="d-inline-block small mt-1">{issue.code}</code>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <Card className="mb-4" title="Belge işlemleri">
         <div className="invoice-actions">
@@ -421,7 +436,9 @@ export function InvoiceDetail() {
               <dt className="col-6">ETTN</dt><dd className="col-6 mono">{i.ettn}</dd>
               <dt className="col-6">Düzenleme</dt><dd className="col-6">{fmtDate(i.issueDate)} {String(i.issueTime).slice(0, 8)}</dd>
               <dt className="col-6">Teslim/hizmet</dt><dd className="col-6">{fmtDate(i.deliveryDate) || '—'}</dd>
-              <dt className="col-6">Oluşturan</dt><dd className="col-6">{i.createdBy}</dd>
+              <dt className="col-6">Oluşturan</dt><dd className="col-6">{(() => { const a = actorLabel(i.createdBy); return a.integration
+                ? <span className="badge text-bg-light border" title={i.createdBy}><i className={`bi bi-${a.icon} me-1`} />{a.label}</span>
+                : <span title={i.createdBy}>{a.label}</span>; })()}</dd>
               <dt className="col-6">Onaylayan</dt><dd className="col-6">{i.approvedBy || '—'}</dd>
               <dt className="col-6">İmzalayan</dt><dd className="col-6">{i.signedBy || '—'}</dd>
               <dt className="col-6">Sağlayıcı ref.</dt><dd className="col-6 mono">{i.providerReference || '—'}</dd>

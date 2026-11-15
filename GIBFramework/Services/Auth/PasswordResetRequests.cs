@@ -6,6 +6,7 @@ using GIBFramework.Base.Extensions;
 using GIBFramework.Controllers;
 using GIBFramework.DAL;
 using GIBFramework.DAL.Identity;
+using GIBFramework.Infrastructure.Background;
 using GIBFramework.Models.Audit;
 
 namespace GIBFramework.Services.Auth;
@@ -33,31 +34,76 @@ public sealed class PasswordResetRequestService(
     ITenantContext context,
     IClock clock,
     IHttpContextAccessor http,
-    Messaging.UserNotifier notifier)
+    Messaging.UserNotifier notifier,
+    ILogger<PasswordResetRequestService> logger)
 {
     public async Task SubmitAsync(string userCode, CancellationToken ct)
     {
-        var user = await users.FindByCodeAsync(UserRepository.Normalize(userCode), ct);
-        if (user is null || !user.IsActive)
-        {
-            return;
-        }
-
         var now = clock.UtcNow;
         await using var c = await connections.OpenSystemAsync(ct);
         await using var cmd = c.Command("""
-            IF NOT EXISTS (SELECT 1 FROM dbo.PasswordResetRequests WHERE UserId = @u AND Status = 'Open' AND RequestedAt > DATEADD(HOUR, -1, @at))
-                INSERT dbo.PasswordResetRequests (Id, UserId, TenantId, UserCode, Ip, RequestedAt, Status)
-                VALUES (@id, @u, @t, @code, @ip, @at, 'Open');
+            INSERT dbo.PasswordResetIntake (Id, UserCode, Ip, RequestedAt) VALUES (@id, @code, @ip, @at);
             """);
-        var inserted = await cmd.With("@id", Guid.CreateVersion7(now)).With("@u", user.Id).With("@t", user.TenantId).With("@code", user.UserCode)
+        await cmd.With("@id", Guid.CreateVersion7(now)).With("@code", UserRepository.Normalize(userCode))
             .With("@ip", http.HttpContext?.Connection.RemoteIpAddress?.ToString()).With("@at", now).ExecuteNonQueryAsync(ct);
-        if (inserted > 0)
+    }
+
+    public async Task DrainIntakeAsync(CancellationToken ct)
+    {
+        var accepted = new List<(string UserCode, string? Ip)>();
+        await using (var c = await connections.OpenSystemAsync(ct))
         {
-            await notifier.ResetRequestedAsync(user, http.HttpContext?.Connection.RemoteIpAddress?.ToString(), ct);
+            await using var cmd = c.Command("""
+                SET XACT_ABORT ON;
+                SET NOCOUNT ON;
+                BEGIN TRANSACTION;
+                DECLARE @lockResult int;
+                EXEC @lockResult = sys.sp_getapplock @Resource = N'GIBFramework.PasswordResetIntake',
+                    @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 0;
+
+                DECLARE @batch TABLE (Id uniqueidentifier PRIMARY KEY, UserCode nvarchar(50), Ip nvarchar(45), RequestedAt datetimeoffset);
+                DECLARE @accepted TABLE (UserCode nvarchar(50), Ip nvarchar(45));
+                IF @lockResult >= 0
+                BEGIN
+                    WITH batch AS (SELECT TOP (100) * FROM dbo.PasswordResetIntake ORDER BY Id)
+                    DELETE FROM batch OUTPUT deleted.Id, deleted.UserCode, deleted.Ip, deleted.RequestedAt INTO @batch;
+
+                    WITH candidates AS (
+                        SELECT b.Id, u.Id AS UserId, u.TenantId, u.UserCode, b.Ip, b.RequestedAt,
+                            ROW_NUMBER() OVER (PARTITION BY u.Id ORDER BY b.Id) AS Occurrence
+                        FROM @batch b JOIN dbo.Users u ON u.UserCode = b.UserCode WHERE u.IsActive = 1
+                    )
+                    INSERT dbo.PasswordResetRequests (Id, UserId, TenantId, UserCode, Ip, RequestedAt, Status)
+                    OUTPUT inserted.UserCode, inserted.Ip INTO @accepted
+                    SELECT Id, UserId, TenantId, UserCode, Ip, RequestedAt, 'Open' FROM candidates AS c
+                    WHERE Occurrence = 1 AND NOT EXISTS (
+                        SELECT 1 FROM dbo.PasswordResetRequests r
+                        WHERE r.UserId = c.UserId AND r.Status = 'Open' AND r.RequestedAt > DATEADD(HOUR, -1, @now)
+                    );
+                END;
+                COMMIT TRANSACTION;
+                SELECT UserCode, Ip FROM @accepted;
+                """);
+            await using var rows = await cmd.With("@now", clock.UtcNow).ExecuteReaderAsync(ct);
+            while (await rows.ReadAsync(ct))
+                accepted.Add((rows.Get<string>("UserCode"), rows.GetNullableString("Ip")));
         }
-        await audit.AppendSystemAsync(user.TenantId ?? Guid.Empty, new AuditEntry("PASSWORD_RESET_REQUESTED", "User", user.UserCode, "Success",
-            new { ip = http.HttpContext?.Connection.RemoteIpAddress?.ToString() }), null, ct);
+
+        foreach (var request in accepted)
+        {
+            try
+            {
+                var user = await users.FindByCodeAsync(request.UserCode, ct);
+                if (user is not { IsActive: true }) continue;
+                await audit.AppendSystemAsync(user.TenantId ?? Guid.Empty,
+                    new AuditEntry("PASSWORD_RESET_REQUESTED", "User", user.UserCode, "Success", new { ip = request.Ip }), null, ct);
+                await notifier.ResetRequestedAsync(user, request.Ip, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogWarning(ex, "Parola sıfırlama isteğinin bildirimi veya denetim kaydı tamamlanamadı.");
+            }
+        }
     }
 
     public async Task<IReadOnlyList<PasswordResetRequestInfo>> ListAsync(bool platform, CancellationToken ct)
@@ -93,6 +139,15 @@ public sealed class PasswordResetRequestService(
             .With("@platform", platform).With("@t", platform ? null : context.RequireTenant());
         return await cmd.ExecuteNonQueryAsync(ct) == 1;
     }
+}
+
+public sealed class PasswordResetIntakeWorker(IServiceScopeFactory scopes, ILogger<PasswordResetIntakeWorker> logger)
+    : PeriodicWorker(scopes, logger)
+{
+    protected override TimeSpan Interval => TimeSpan.FromSeconds(3);
+
+    protected override Task RunOnceAsync(IServiceProvider services, CancellationToken ct) =>
+        services.GetRequiredService<PasswordResetRequestService>().DrainIntakeAsync(ct);
 }
 
 [ApiController]

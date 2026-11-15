@@ -35,6 +35,7 @@ public sealed class CustomersController(ICustomerRepository customers, ITenantCo
     }
 
     [HttpPut("{id:guid}")]
+    [HttpPost("{id:guid}/update")]
     [Authorize(Policy = Policies.CatalogManage)]
     public async Task<ActionResult<Customer>> Update(Guid id, [FromBody] CustomerRequest request, CancellationToken ct)
     {
@@ -54,6 +55,7 @@ public sealed class CustomersController(ICustomerRepository customers, ITenantCo
     }
 
     [HttpDelete("{id:guid}")]
+    [HttpPost("{id:guid}/delete")]
     [Authorize(Policy = Policies.CatalogManage)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct) =>
         await customers.DeleteAsync(context.RequireTenant(), id, ct) ? NoContent() : NotFound();
@@ -130,6 +132,7 @@ public sealed class ProductsController(IProductRepository products, ITenantConte
     }
 
     [HttpPut("{id:guid}")]
+    [HttpPost("{id:guid}/update")]
     [Authorize(Policy = Policies.CatalogManage)]
     public async Task<ActionResult<Product>> Update(Guid id, [FromBody] ProductRequest request, CancellationToken ct)
     {
@@ -144,6 +147,7 @@ public sealed class ProductsController(IProductRepository products, ITenantConte
     }
 
     [HttpDelete("{id:guid}")]
+    [HttpPost("{id:guid}/delete")]
     [Authorize(Policy = Policies.CatalogManage)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct) =>
         await products.DeleteAsync(context.RequireTenant(), id, ct) ? NoContent() : NotFound();
@@ -191,6 +195,7 @@ public sealed class SettingsController(ITenantSettingsRepository settings, ITena
     }
 
     [HttpPut]
+    [HttpPost("update")]
     [Authorize(Policy = Policies.SettingsManage)]
     public async Task<TenantSettings> Save([FromBody] TenantSettingsRequest request, CancellationToken ct)
     {

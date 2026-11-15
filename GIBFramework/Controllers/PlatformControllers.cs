@@ -27,10 +27,12 @@ public sealed class TenantsController(ITenantRepository tenants, IAuditTrail aud
         {
             throw new ValidationFailedException("TENANT_TAX_ID", "Kiracı VKN/TCKN geçersiz.", [error.Message]);
         }
+        if (request.EFaturaPrefix == "TSL" || request.EArsivPrefix == "TSL" || request.EFaturaPrefix == request.EArsivPrefix)
+            throw new ValidationFailedException("TENANT_PREFIX", "e-Fatura ve e-Arşiv serileri farklı olmalı ve TSL kullanılamaz.", []);
 
         var tenant = request.ToTenant(clock.UtcNow);
         await tenants.CreateAsync(tenant, ct);
-        await audit.AppendSystemAsync(tenant.Id, new AuditEntry("TENANT_CREATED", "Tenant", tenant.Id.ToString(), "Success", new { by = context.UserId, tenant.Name }), null, ct);
+        await audit.AppendActorAsync(tenant.Id, new AuditEntry("TENANT_CREATED", "Tenant", tenant.Id.ToString(), Data: new { tenant.Name }), ct);
         return CreatedAtAction(nameof(Current), null, tenant);
     }
 
@@ -39,6 +41,7 @@ public sealed class TenantsController(ITenantRepository tenants, IAuditTrail aud
     public async Task<IActionResult> List(CancellationToken ct) => Ok(await tenants.ListAsync(ct));
 
     [HttpPut("current")]
+    [HttpPost("current/update")]
     [Authorize(Policy = Policies.CompanyManage)]
     public async Task<IActionResult> UpdateCurrent([FromBody] UpdateCompanyRequest request, CancellationToken ct)
     {
@@ -50,6 +53,27 @@ public sealed class TenantsController(ITenantRepository tenants, IAuditTrail aud
 
         var tenant = await tenants.GetAsync(context.RequireTenant(), ct) ?? throw new NotFoundException("Firma bulunamadı.");
         var p = tenant.Profile;
+        var taxId = new string([.. (request.TaxId ?? string.Empty).Where(char.IsAsciiDigit)]);
+        if (taxId.Length > 0 && taxId != p.TaxId)
+        {
+            if (!TaxIdentifier.TryParse(taxId, out _, out var taxError))
+                throw new ValidationFailedException(taxError.Code, taxError.Message, []);
+            if (await tenants.HasIssuedInvoicesAsync(tenant.Id, ct))
+                throw new ValidationFailedException("TENANT_TAX_ID_LOCKED", "Numara almış fatura bulunduğu için VKN/TCKN değiştirilemez. Yeni VKN için yeni firma oluşturun.", []);
+            p.TaxId = taxId;
+        }
+
+        p.Kind = request.Kind ?? (p.TaxId.Length == 11 ? PartyKind.NaturalPerson : PartyKind.LegalEntity);
+        if (p.Kind == PartyKind.NaturalPerson && p.TaxId.Length != 11)
+            throw new ValidationFailedException("TENANT_KIND", "Gerçek kişi için 11 haneli TCKN gereklidir.", []);
+        if (p.Kind == PartyKind.LegalEntity && p.TaxId.Length != 10)
+            throw new ValidationFailedException("TENANT_KIND", "Tüzel kişi için 10 haneli VKN gereklidir.", []);
+        p.FirstName = request.FirstName is null ? p.FirstName : CustomersController.Clean(request.FirstName);
+        p.FamilyName = request.FamilyName is null ? p.FamilyName : CustomersController.Clean(request.FamilyName);
+        if (p.Kind == PartyKind.NaturalPerson && (string.IsNullOrWhiteSpace(p.FirstName) || string.IsNullOrWhiteSpace(p.FamilyName)))
+            throw new ValidationFailedException("TENANT_PERSON_NAME", "Gerçek kişi (şahıs) firmalarda ad ve soyad zorunludur.", []);
+        p.Country = string.IsNullOrWhiteSpace(request.Country) ? p.Country : request.Country.Trim();
+        p.Alias = request.Alias is null ? p.Alias : CustomersController.Clean(request.Alias);
         tenant.Name = request.Name.Trim();
         p.Title = request.Title.Trim();
         p.Regime = request.Regime;
@@ -71,8 +95,8 @@ public sealed class TenantsController(ITenantRepository tenants, IAuditTrail aud
         tenant.EFaturaPrefix = request.EFaturaPrefix;
         tenant.EArsivPrefix = request.EArsivPrefix;
         await tenants.UpdateAsync(tenant, ct);
-        await audit.AppendSystemAsync(tenant.Id, new AuditEntry("TENANT_UPDATED", "Tenant", tenant.Id.ToString(), "Success",
-            new { by = context.UserId, tenant.Name, tenant.EFaturaPrefix, tenant.EArsivPrefix }), null, ct);
+        await audit.AppendActorAsync(tenant.Id, new AuditEntry("TENANT_UPDATED", "Tenant", tenant.Id.ToString(), Data:
+            new { tenant.Name, p.TaxId, tenant.EFaturaPrefix, tenant.EArsivPrefix }), ct);
         return Ok(tenant);
     }
 
@@ -180,16 +204,22 @@ public sealed class IncomingInvoicesController(IncomingInvoiceService service) :
 [Authorize(Policy = Policies.AuditRead)]
 public sealed class AuditController(IAuditTrail audit, ITenantContext context) : ControllerBase
 {
-    private Guid AuditTenant => context.TenantId ?? (User.IsInRole(Roles.PlatformSuperAdmin) ? Guid.Empty : context.RequireTenant());
+    private Guid AuditTenant(bool platform)
+    {
+        if (platform && !User.IsInRole(Roles.PlatformSuperAdmin))
+            throw new ForbiddenOperationException("AUDIT_PLATFORM_SCOPE", "Platform kayıtlarını yalnızca platform yöneticisi görebilir.");
+
+        return platform || (context.TenantId is null && User.IsInRole(Roles.PlatformSuperAdmin)) ? Guid.Empty : context.RequireTenant();
+    }
 
     [HttpGet("events")]
     public async Task<IActionResult> Events([FromQuery] string? entityId, [FromQuery] string? userId, [FromQuery] string? action,
         [FromQuery] string? role, [FromQuery] DateTimeOffset? from, [FromQuery] DateTimeOffset? until, [FromQuery] string? result,
-        [FromQuery] int take = 100, [FromQuery] long? before = null, CancellationToken ct = default) =>
-        Ok(await audit.ListAsync(AuditTenant, entityId, take, before, ct, userId, action, role, from, until, result));
+        [FromQuery] int take = 100, [FromQuery] long? before = null, [FromQuery] bool platform = false, CancellationToken ct = default) =>
+        Ok(await audit.ListAsync(AuditTenant(platform), entityId, take, before, ct, userId, action, role, from, until, result));
 
     [HttpGet("verify")]
-    public async Task<IActionResult> Verify(CancellationToken ct) => Ok(await audit.VerifyAsync(AuditTenant, ct));
+    public async Task<IActionResult> Verify([FromQuery] bool platform, CancellationToken ct) => Ok(await audit.VerifyAsync(AuditTenant(platform), ct));
 }
 
 [ApiController]
@@ -225,12 +255,14 @@ public sealed class DocumentsController(ISigningCertificateProvider certificates
     }
 }
 
+#if DEBUG
 [ApiController]
 [Route("api/v1/dev")]
 [AllowAnonymous]
 public sealed class DevAuthController(TokenService tokens, JwtOptions options, IHostEnvironment environment) : ControllerBase
 {
     [HttpPost("token")]
+    [Microsoft.AspNetCore.RateLimiting.EnableRateLimiting(AuthController.LoginRateLimitPolicy)]
     public IActionResult Token([FromBody] DevTokenRequest request)
     {
         if (!environment.IsDevelopment() || !options.DevTokenEnabled)
@@ -241,3 +273,4 @@ public sealed class DevAuthController(TokenService tokens, JwtOptions options, I
         return Ok(new DevTokenResponse(tokens.Issue(request.UserId, request.TenantId, request.Roles), "Bearer", request.Roles));
     }
 }
+#endif

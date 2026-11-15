@@ -50,7 +50,7 @@ public sealed class AuthService(
         if (user is null || !user.IsActive)
         {
             _ = hasher.VerifyHashedPassword(Dummy, DummyHash.Value, password ?? string.Empty);
-            await AuditAsync(null, "AUTH_LOGIN_FAILED", userCode, "Failure", "Kullanıcı yok veya pasif", ct);
+            await AuditAsync(user, "AUTH_LOGIN_FAILED", userCode, "Failure", "Kullanıcı yok veya pasif", ct);
             return new LoginResult(LoginOutcome.InvalidCredentials, null, null, null);
         }
 
@@ -65,13 +65,15 @@ public sealed class AuthService(
             }
         }
 
+        var verification = hasher.VerifyHashedPassword(user, user.PasswordHash, password ?? string.Empty);
         if (user.IsLockedOut(now))
         {
             await AuditAsync(user, "AUTH_LOGIN_LOCKED", user.UserCode, "Failure", "Hesap kilitli", ct);
-            return new LoginResult(LoginOutcome.LockedOut, null, null, user.LockoutUntil);
+            return verification == PasswordVerificationResult.Failed
+                ? new LoginResult(LoginOutcome.InvalidCredentials, null, null, null)
+                : new LoginResult(LoginOutcome.LockedOut, null, null, user.LockoutUntil);
         }
 
-        var verification = hasher.VerifyHashedPassword(user, user.PasswordHash, password ?? string.Empty);
         if (verification == PasswordVerificationResult.Failed)
         {
             return await FailAsync(user, "Hatalı şifre", ct);
@@ -87,7 +89,7 @@ public sealed class AuthService(
             var step = Totp.Verify(UnprotectSecret(user), totpCode, now, user.TotpLastStep);
             if (step is null)
             {
-                return await FailAsync(user, "Hatalı doğrulama kodu", ct);
+                return await FailAsync(user, "Hatalı doğrulama kodu", ct, passwordVerified: true);
             }
 
             user.TotpLastStep = step;
@@ -194,7 +196,7 @@ public sealed class AuthService(
         user.UpdatedAt = clock.UtcNow;
     }
 
-    private async Task<LoginResult> FailAsync(UserAccount user, string reason, CancellationToken ct)
+    private async Task<LoginResult> FailAsync(UserAccount user, string reason, CancellationToken ct, bool passwordVerified = false)
     {
         var now = clock.UtcNow;
         user.FailedLoginCount++;
@@ -213,7 +215,7 @@ public sealed class AuthService(
             await notifier.LockedAsync(user, user.LockoutUntil!.Value, ct);
         }
         await AuditAsync(user, "AUTH_LOGIN_FAILED", user.UserCode, "Failure", reason, ct);
-        return user.LockoutUntil is { } until && until > now
+        return passwordVerified && user.LockoutUntil is { } until && until > now
             ? new LoginResult(LoginOutcome.LockedOut, null, null, until)
             : new LoginResult(LoginOutcome.InvalidCredentials, null, null, null);
     }
@@ -224,9 +226,11 @@ public sealed class AuthService(
     private byte[] UnprotectSecret(UserAccount user) => Convert.FromBase64String(_totpProtector.Unprotect(user.TotpSecretProtected!));
 
     private Task AuditAsync(UserAccount? user, string action, string userCode, string result, string? reason, CancellationToken ct) =>
-        audit.AppendSystemAsync(
+        audit.AppendAuthenticationAsync(
             user?.TenantId ?? Guid.Empty,
-            new AuditEntry(action, "User", UserRepository.Normalize(userCode), result, new { ip = context.Ip }, reason),
-            null,
+            user?.UserCode,
+            user?.Roles ?? [],
+            context.Ip,
+            new AuditEntry(action, "User", UserRepository.Normalize(userCode), result, FailureReason: reason),
             ct);
 }

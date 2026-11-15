@@ -1,3 +1,4 @@
+import { HtmlPreview } from '../../components/HtmlPreview.jsx';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../api.js';
 import { fmtDate } from '../../format.js';
@@ -355,7 +356,133 @@ function TemplateEditor({ template, onSaved }) {
             <>
               <div className="px-3 py-2 border-bottom small"><span className="text-body-secondary">Konu:</span> <strong>{preview.subject}</strong></div>
               {preview.unknown?.length > 0 && <div className="alert alert-warning rounded-0 mb-0 small py-2">Tanımsız değişken: {preview.unknown.join(', ')}</div>}
-              <iframe title="E-posta önizleme" className="w-100 border-0 d-block" style={{ height: '34rem', background: '#f4f7fb' }} sandbox="" srcDoc={preview.html} />
+              <HtmlPreview title="E-posta önizleme" className="w-100 border-0 d-block" style={{ height: '34rem', background: '#f4f7fb' }} html={preview.html} />
+            </>
+          ) : (
+            <div className="p-4">
+              <div className="sms-bubble">{preview.text}</div>
+              <div className="small text-body-secondary mt-2">{preview.length} karakter, {preview.segments} SMS</div>
+              {preview.unknown?.length > 0 && <div className="alert alert-warning mt-2 mb-0 small py-2">Tanımsız değişken: {preview.unknown.join(', ')}</div>}
+            </div>
+          )}
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+const EMPTY_CUSTOM = {
+  id: null, name: '', event: 'invoice.issued', recipient: 'Customer', address: '', channel: 'Email', enabled: true,
+  subject: '{{firma.unvan}}: {{fatura.no}} numaralı faturanız', body: '<p>Sayın {{musteri.unvan}},</p>\n<p>{{fatura.no}} numaralı faturanızı aşağıdaki bağlantıdan görüntüleyebilirsiniz.</p>\n<p><a href="{{fatura.link}}">Faturayı görüntüle</a></p>', attachInvoice: false,
+};
+
+function CustomTemplateEditor({ template, meta, onSaved, onDeleted }) {
+  const toast = useToast();
+  const [form, setForm] = useState(() => ({ ...EMPTY_CUSTOM, ...template, address: template.address || '', subject: template.subject || '' }));
+  const [preview, setPreview] = useState(null);
+  const [error, setError] = useState(null);
+  const bodyRef = useRef(null);
+  const isEmail = form.channel === 'Email';
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value }));
+  const setBody = (body) => setForm((f) => ({ ...f, body }));
+
+  useEffect(() => {
+    const handle = setTimeout(async () => {
+      try {
+        setPreview(await api.post('/api/v1/messaging/templates/preview', { key: 'custom', channel: form.channel, subject: form.subject, body: form.body || ' ' }));
+      } catch {
+        setPreview(null);
+      }
+    }, 350);
+    return () => clearTimeout(handle);
+  }, [form.channel, form.subject, form.body]);
+
+  const save = async () => {
+    setError(null);
+    try {
+      const saved = await api.put('/api/v1/messaging/custom-templates', { ...form, subject: isEmail ? form.subject : null, address: form.recipient === 'Address' ? form.address : null });
+      toast(form.id ? 'Şablon kaydedildi.' : 'Bildirim şablonu oluşturuldu.');
+      await onSaved(saved.id);
+    } catch (err) {
+      setError(err);
+    }
+  };
+
+  return (
+    <div className="row g-4">
+      <div className="col-xxl-6">
+        <Card title={form.id ? form.name || 'Özel şablon' : 'Yeni bildirim şablonu'} icon="file-earmark-plus"
+          actions={(
+            <div className="form-check form-switch m-0">
+              <input className="form-check-input" type="checkbox" role="switch" id="ctplOn" checked={form.enabled} onChange={set('enabled')} />
+              <label className="form-check-label small" htmlFor="ctplOn">{form.enabled ? 'Etkin' : 'Kapalı'}</label>
+            </div>
+          )}
+          footer={(
+            <div className="d-flex justify-content-between gap-2">
+              {form.id ? (
+                <BusyButton className="btn btn-outline-danger" onClick={async () => {
+                  await api.del(`/api/v1/messaging/custom-templates/${form.id}`);
+                  toast('Şablon silindi.', 'info');
+                  await onDeleted();
+                }}><i className="bi bi-trash me-1" />Sil</BusyButton>
+              ) : <span />}
+              <BusyButton onClick={save}><i className="bi bi-save me-1" />{form.id ? 'Kaydet' : 'Şablonu oluştur'}</BusyButton>
+            </div>
+          )}>
+          <ErrorAlert error={error} />
+          <div className="row g-3">
+            <div className="col-12"><label className="form-label" htmlFor="ctName">Şablon adı</label>
+              <input className="form-control" id="ctName" maxLength={100} placeholder="Örn. Muhasebeye düzenlenen fatura bildirimi" value={form.name} onChange={set('name')} /></div>
+            <div className="col-md-6"><label className="form-label" htmlFor="ctEvent">Ne zaman gönderilsin?</label>
+              <select className="form-select" id="ctEvent" value={form.event} onChange={set('event')}>
+                {meta.events.map((e) => <option key={e.code} value={e.code}>{e.label}</option>)}
+              </select></div>
+            <div className="col-md-6"><label className="form-label" htmlFor="ctChannel">Kanal</label>
+              <select className="form-select" id="ctChannel" value={form.channel} onChange={set('channel')}>
+                <option value="Email">E-posta</option><option value="Sms">SMS</option>
+              </select></div>
+            <div className="col-md-6"><label className="form-label" htmlFor="ctRecipient">Kime?</label>
+              <select className="form-select" id="ctRecipient" value={form.recipient} onChange={set('recipient')}>
+                {meta.recipients.map((r) => <option key={r.code} value={r.code}>{r.label}</option>)}
+              </select></div>
+            {form.recipient === 'Address' && (
+              <div className="col-md-6"><label className="form-label" htmlFor="ctAddress">{isEmail ? 'E-posta adresi' : 'Cep telefonu'}</label>
+                <input className="form-control" id="ctAddress" type={isEmail ? 'email' : 'tel'} maxLength={320} placeholder={isEmail ? 'muhasebe@alanadi.com' : '05xx xxx xx xx'} value={form.address} onChange={set('address')} /></div>
+            )}
+            {isEmail && (
+              <div className="col-12"><label className="form-label" htmlFor="ctSubject">Konu</label>
+                <input className="form-control" id="ctSubject" maxLength={300} value={form.subject} onChange={set('subject')} /></div>
+            )}
+            <div className="col-12">
+              <label className="form-label" htmlFor="ctBody">{isEmail ? 'İçerik (HTML)' : 'Mesaj'}</label>
+              <textarea ref={bodyRef} className="form-control font-monospace small" id="ctBody" rows={isEmail ? 12 : 5} value={form.body} onChange={(e) => setBody(e.target.value)} />
+            </div>
+            {isEmail && (
+              <div className="col-12 form-check ms-1">
+                <input className="form-check-input" type="checkbox" id="ctAttach" checked={form.attachInvoice} onChange={set('attachInvoice')} />
+                <label className="form-check-label" htmlFor="ctAttach">Fatura PDF, HTML ve XML dosyalarını ekle <span className="text-body-secondary small">(yalnızca düzenlenmiş faturalarda)</span></label>
+              </div>
+            )}
+          </div>
+          <div className="mt-3">
+            <div className="small text-body-secondary mb-1">Değişkenler (eklemek için tıklayın)</div>
+            <div className="d-flex flex-wrap gap-1">
+              {meta.variables.map((v) => (
+                <button key={v.name} type="button" className="btn btn-sm btn-outline-secondary py-0 px-2 font-monospace" title={`${v.description} · örn. ${v.sample}`}
+                  onClick={() => insertAt(bodyRef.current, `{{${v.name}}}`, form.body, setBody)}>{`{{${v.name}}}`}</button>
+              ))}
+            </div>
+          </div>
+        </Card>
+      </div>
+      <div className="col-xxl-6">
+        <Card title="Önizleme" icon="eye" bodyClass="card-body p-0">
+          {!preview ? <div className="p-3"><Spinner /></div> : isEmail ? (
+            <>
+              <div className="px-3 py-2 border-bottom small"><span className="text-body-secondary">Konu:</span> <strong>{preview.subject}</strong></div>
+              {preview.unknown?.length > 0 && <div className="alert alert-warning rounded-0 mb-0 small py-2">Tanımsız değişken: {preview.unknown.join(', ')}</div>}
+              <HtmlPreview title="E-posta önizleme" className="w-100 border-0 d-block" style={{ height: '34rem', background: '#f4f7fb' }} html={preview.html} />
             </>
           ) : (
             <div className="p-4">
@@ -372,6 +499,7 @@ function TemplateEditor({ template, onSaved }) {
 
 function Templates() {
   const { data, loading, error, reload } = useLoad(() => api.get('/api/v1/messaging/templates'), []);
+  const custom = useLoad(() => api.get('/api/v1/messaging/custom-templates'), []);
   const [selected, setSelected] = useState(null);
   const groups = useMemo(() => {
     const map = new Map();
@@ -389,12 +517,38 @@ function Templates() {
   if (error) return <ErrorAlert error={error} />;
   if (!data?.length) return <Card><Empty icon="file-earmark-text">Bildirim şablonu bulunamadı.</Empty></Card>;
   const current = data.find((t) => t.key === selected?.key && t.channel === selected?.channel);
+  const customList = custom.data?.templates || [];
+  const eventLabel = (code) => custom.data?.events.find((e) => e.code === code)?.label || code;
+  const currentCustom = selected?.custom === 'new' ? EMPTY_CUSTOM : customList.find((t) => t.id === selected?.custom);
 
   return (
     <div className="row g-4">
       <div className="col-lg-4 col-xxl-3">
+        <button type="button" className="btn btn-primary w-100 mb-3" disabled={!custom.data} onClick={() => setSelected({ custom: 'new' })}>
+          <i className="bi bi-plus-lg me-1" />Bildirim şablonu ekle
+        </button>
+        <ErrorAlert error={custom.error} />
+        {customList.length > 0 && (
+          <div className="card shadow-sm mb-3">
+            <div className="card-header"><span className="fw-semibold">Özel şablonlar</span></div>
+            <div className="list-group list-group-flush mt-2">
+              {customList.map((t) => (
+                <button key={t.id} type="button" onClick={() => setSelected({ custom: t.id })}
+                  className={`list-group-item list-group-item-action ${selected?.custom === t.id ? 'active' : ''}`}>
+                  <div className="d-flex align-items-center gap-2">
+                    <i className={`bi bi-${CHANNEL[t.channel][0]}`} />
+                    <span className="fw-semibold small flex-grow-1 text-truncate">{t.name}</span>
+                    <span className={`status-dot me-0 ${t.enabled ? 'bg-success' : 'bg-secondary'}`} />
+                  </div>
+                  <div className="small opacity-75">{eventLabel(t.event)}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         <div className="card shadow-sm">
-          <div className="list-group list-group-flush">
+          <div className="card-header"><span className="fw-semibold">Sistem şablonları</span></div>
+          <div className="list-group list-group-flush mt-2">
             {groups.map((g) => (
               <div key={g.key} className="list-group-item">
                 <div className="fw-semibold small">{g.label}</div>
@@ -414,7 +568,11 @@ function Templates() {
         </div>
       </div>
       <div className="col-lg-8 col-xxl-9">
-        {current && <TemplateEditor key={`${current.key}-${current.channel}-${current.isCustom}-${current.body.length}`} template={current} onSaved={reload} />}
+        {currentCustom && custom.data ? (
+          <CustomTemplateEditor key={selected.custom} template={currentCustom} meta={custom.data}
+            onSaved={async (id) => { await custom.reload(); setSelected({ custom: id }); }}
+            onDeleted={async () => { await custom.reload(); setSelected(null); }} />
+        ) : current && <TemplateEditor key={`${current.key}-${current.channel}-${current.isCustom}-${current.body.length}`} template={current} onSaved={reload} />}
       </div>
     </div>
   );
@@ -454,7 +612,7 @@ function MessageDetail({ id, onClose, onChanged }) {
               {data.attachments.length > 0 && <><dt className="col-sm-3">Ekler</dt><dd className="col-sm-9">{data.attachments.map((a) => <span key={a} className="badge text-bg-light border me-1">{a === 'InvoiceHtml' ? 'Fatura (HTML)' : 'UBL-TR XML'}</span>)}</dd></>}
             </dl>
             {m.channel === 'Email'
-              ? <iframe title="E-posta içeriği" className="w-100 border rounded" style={{ height: '28rem', background: '#f4f7fb' }} sandbox="" srcDoc={data.body} />
+              ? <HtmlPreview title="E-posta içeriği" className="w-100 border rounded" style={{ height: '28rem', background: '#f4f7fb' }} html={data.body} />
               : <div className="sms-bubble">{data.body}</div>}
           </>
         )}

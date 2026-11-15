@@ -179,6 +179,10 @@ h1, h2, h3, h4, h5, h6 { font-family: var(--ivory-heading); }
 .invoice-filters > :first-child { grid-column: 1 / -1; }
 .invoice-table-body { padding: 16px 18px; }
 .invoice-customer-search { width: min(18rem, 100%); flex: 0 1 18rem; }
+.invoice-customer-results { position: absolute; z-index: 20; max-height: min(18rem, 45dvh); overflow-y: auto; }
+.invoice-result-customer { max-width: min(22rem, 32vw); overflow-wrap: anywhere; }
+.ivory-chart-scroll { overflow-x: auto; }
+.ivory-chart-scroll svg { min-width: 25rem; }
 .invoice-totals .table-primary > * { --bs-table-bg: var(--ivory-rose); --bs-table-color: var(--app-ink); }
 .invoice-actions { display: grid; gap: 18px; }
 .invoice-actions h2 { color: var(--app-muted); font: 650 .78rem var(--ivory-font); text-transform: uppercase; margin-bottom: 10px; }
@@ -190,6 +194,20 @@ h1, h2, h3, h4, h5, h6 { font-family: var(--ivory-heading); }
 @media (max-width: 575.98px) {
   .invoice-filters { grid-template-columns: minmax(0, 1fr); }
   .invoice-table-body { padding-inline: 0; }
+  .invoice-customer-results { position: static; }
+  .line-card { padding: .75rem; }
+}
+
+@media (max-width: 767.98px) {
+  .app-content { padding-block: 1rem 1.5rem; }
+  .invoice-results thead { position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden; clip-path: inset(50%); }
+  .invoice-results, .invoice-results tbody, .invoice-results tr { display: block; }
+  .invoice-results tr { padding: .5rem .75rem; border-bottom: 1px solid var(--app-line); }
+  .invoice-results td { display: grid; grid-template-columns: minmax(5rem, 1fr) minmax(0, 2fr); gap: .15rem .65rem; border: 0; white-space: normal; text-align: start; }
+  .invoice-results td::before { content: attr(data-label); grid-row: 1 / span 2; color: var(--app-muted); }
+  .invoice-results td > * { grid-column: 2; min-width: 0; justify-self: start; }
+  .invoice-results td, .invoice-results td .badge { overflow-wrap: anywhere; white-space: normal; }
+  .invoice-results .invoice-result-customer { max-width: none; }
 }
 
 .gib-brand { display: inline-flex; align-items: center; gap: 9px; color: var(--app-ink); white-space: nowrap; }

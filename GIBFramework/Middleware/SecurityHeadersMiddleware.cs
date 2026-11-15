@@ -3,7 +3,7 @@ namespace GIBFramework.Middleware;
 public sealed class SecurityHeadersMiddleware(RequestDelegate next, IHostEnvironment environment)
 {
     private const string AppPolicy =
-        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; "
+        "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; "
         + "connect-src 'self'; frame-src 'self' blob:; worker-src 'self' blob:; manifest-src 'self'; media-src 'self'; object-src 'none'; "
         + "base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
 
@@ -11,6 +11,11 @@ public sealed class SecurityHeadersMiddleware(RequestDelegate next, IHostEnviron
         "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
         + "img-src 'self' data: blob: https:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self'; worker-src 'self' blob:; "
         + "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
+
+    // The hash covers the inline bridge script in wwwroot/preview/frame.html.
+    private const string PreviewFramePolicy =
+        "default-src 'none'; script-src 'sha256-Os+r7YYcyjuI5F8akxHBfoJRIHHEmbezZEz+2AkRZYU='; style-src 'unsafe-inline'; img-src data:; font-src data:; "
+        + "frame-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; sandbox allow-scripts";
 
     private const string PermissionsPolicy =
         "accelerometer=(), autoplay=(), camera=(), display-capture=(), encrypted-media=(), fullscreen=(self), geolocation=(), gyroscope=(), "
@@ -24,6 +29,7 @@ public sealed class SecurityHeadersMiddleware(RequestDelegate next, IHostEnviron
         var isDocs = request.Path.StartsWithSegments("/swagger", StringComparison.OrdinalIgnoreCase)
             || request.Path.StartsWithSegments("/redoc", StringComparison.OrdinalIgnoreCase);
         var isApi = request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase);
+        var isPreviewFrame = request.Path.Equals("/preview/frame.html", StringComparison.OrdinalIgnoreCase);
 
         context.Response.OnStarting(() =>
         {
@@ -31,9 +37,10 @@ public sealed class SecurityHeadersMiddleware(RequestDelegate next, IHostEnviron
             headers.Remove("Server");
             headers.Remove("X-Powered-By");
             if (!headers.ContainsKey("Content-Security-Policy"))
-                headers.ContentSecurityPolicy = (isDocs ? DocsPolicy : AppPolicy) + (request.IsHttps ? "; upgrade-insecure-requests" : string.Empty);
+                headers.ContentSecurityPolicy = (isPreviewFrame ? PreviewFramePolicy : isDocs ? DocsPolicy : AppPolicy)
+                    + (request.IsHttps ? "; upgrade-insecure-requests" : string.Empty);
             headers.XContentTypeOptions = "nosniff";
-            headers.XFrameOptions = "DENY";
+            headers.XFrameOptions = isPreviewFrame ? "SAMEORIGIN" : "DENY";
             headers.XXSSProtection = "0";
             headers["Referrer-Policy"] = "no-referrer";
             headers["Permissions-Policy"] = PermissionsPolicy;
@@ -43,6 +50,7 @@ public sealed class SecurityHeadersMiddleware(RequestDelegate next, IHostEnviron
             headers["X-Permitted-Cross-Domain-Policies"] = "none";
             headers["X-DNS-Prefetch-Control"] = "off";
             headers["X-Download-Options"] = "noopen";
+            headers["X-Robots-Tag"] = "noindex, nofollow, noarchive";
             if (!isDocs)
             {
                 headers["Cross-Origin-Embedder-Policy"] = "require-corp";

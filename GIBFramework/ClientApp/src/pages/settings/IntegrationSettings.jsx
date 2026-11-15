@@ -136,16 +136,20 @@ function FieldInput({ field, value, onChange, hasSecret, secretValue, onSecret }
 
 function SetupCard({ id, info }) {
   const toast = useToast();
-  const { data, loading, reload } = useLoad(() => api.get(`/api/v1/integrations/${id}/setup`), [id]);
+  const { data, loading, error, reload } = useLoad(() => api.get(`/api/v1/integrations/${id}/setup`), [id]);
   const [show, setShow] = useState(false);
   if (loading) return <Card title="Kurulum" icon="tools"><Spinner /></Card>;
+  if (error || !data) return <Card title="Kurulum" icon="tools"><ErrorAlert error={error || { message: 'Kurulum bilgileri alınamadı.' }} /></Card>;
   return (
     <Card title="Kurulum" icon="tools" className="mb-4">
-      <label className="form-label small text-body-secondary mb-1">Gelen adres (webhook URL)</label>
-      <div className="input-group mb-3">
-        <input className="form-control font-monospace small" readOnly value={data.inboundUrl} onFocus={(e) => e.target.select()} aria-label="Gelen adres" />
-        <button className="btn btn-outline-secondary" type="button" aria-label="Kopyala" onClick={() => copy(data.inboundUrl, toast)}><i className="bi bi-clipboard" /></button>
-      </div>
+      {info.inbound && <>
+        <label className="form-label small text-body-secondary mb-1">Gelen adres (webhook URL)</label>
+        <div className="input-group mb-3">
+          <input className="form-control font-monospace small" readOnly value={data.inboundUrl} onFocus={(e) => e.target.select()} aria-label="Gelen adres" />
+          <button className="btn btn-outline-secondary" type="button" aria-label="Kopyala" onClick={() => copy(data.inboundUrl, toast)}><i className="bi bi-clipboard" /></button>
+        </div>
+      </>}
+      {!info.inbound && !data.signingSecret && <p className="small text-body-secondary mb-0">Bildirim imza anahtarını oluşturmak için entegrasyonu yeniden kaydedin.</p>}
       {data.signingSecret && (
         <>
           <label className="form-label small text-body-secondary mb-1">İmza anahtarı · {data.signatureHeader}</label>
@@ -153,7 +157,7 @@ function SetupCard({ id, info }) {
             <input className="form-control font-monospace small" readOnly type={show ? 'text' : 'password'} value={data.signingSecret} aria-label="İmza anahtarı" />
             <button className="btn btn-outline-secondary" type="button" aria-label="Göster" onClick={() => setShow(!show)}><i className={`bi bi-${show ? 'eye-slash' : 'eye'}`} /></button>
             <button className="btn btn-outline-secondary" type="button" aria-label="Kopyala" onClick={() => copy(data.signingSecret, toast)}><i className="bi bi-clipboard" /></button>
-            {info.fields.some((f) => f.key === 'signingSecret' && f.type === 'generated') && (
+            {(!info.inbound || info.fields.some((f) => f.key === 'signingSecret' && f.type === 'generated')) && (
               <BusyButton className="btn btn-outline-danger" title="Yeni anahtar üret" onClick={async () => {
                 await api.post(`/api/v1/integrations/${id}/rotate-secret`);
                 toast('Yeni imza anahtarı üretildi; karşı sistemi güncelleyin.', 'warning');
@@ -163,12 +167,12 @@ function SetupCard({ id, info }) {
           </div>
         </>
       )}
-      <ol className="small ps-3 mb-0">
+      {info.inbound && <ol className="small ps-3 mb-0">
         {data.steps.map((s) => <li key={s} className="mb-1">{s}</li>)}
-      </ol>
+      </ol>}
       {data.code && (
         <div className="mt-3">
-          <div className="d-flex justify-content-between align-items-center mb-2">
+          <div className="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
             <span className="small fw-semibold font-monospace">{data.fileName}</span>
             <div className="btn-group btn-group-sm">
               <button type="button" className="btn btn-outline-secondary" onClick={() => copy(data.code, toast)}><i className="bi bi-clipboard me-1" />Kopyala</button>
@@ -289,7 +293,7 @@ function IntegrationEditor() {
   const save = async () => {
     setSaveError(null);
     try {
-      await api.put(`/api/v1/integrations/${id}`, { kind: item.kind, ...form });
+      await api.post(`/api/v1/integrations/${id}/update`, { kind: item.kind, ...form });
       toast('Entegrasyon kaydedildi.');
       await reload();
       setRefresh((x) => x + 1);
@@ -303,14 +307,15 @@ function IntegrationEditor() {
       <div className="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
         <Link to="/settings/integrations" className="btn btn-sm btn-outline-secondary btn-pill"><i className="bi bi-arrow-left me-1" />Entegrasyonlar</Link>
         <div className="d-flex flex-wrap gap-2">
-          <BusyButton className="btn btn-sm btn-outline-primary btn-pill" disabled={!form.settings.webhookUrl} onClick={async () => {
+          <BusyButton className="btn btn-sm btn-outline-primary btn-pill" disabled={!item.isActive || !item.settings.webhookUrl}
+            title="Kayıtlı giden bildirim adresini test eder" onClick={async () => {
             const d = await api.post(`/api/v1/integrations/${id}/test`);
             toast(d.status === 'Succeeded' ? `Deneme başarılı (HTTP ${d.httpStatus}).` : `Deneme başarısız: ${d.error || d.httpStatus}`, d.status === 'Succeeded' ? 'success' : 'danger');
             setRefresh((x) => x + 1);
-          }}><i className="bi bi-broadcast me-1" />Webhook dene</BusyButton>
+          }}><i className="bi bi-broadcast me-1" />Giden bildirimi dene</BusyButton>
           <BusyButton className="btn btn-sm btn-outline-danger btn-pill" onClick={async () => {
             if (!await dialogs.confirm('Entegrasyonu sil', `"${item.name}" ve kayıtları silinsin mi? Oluşturulmuş faturalar etkilenmez.`, 'Sil', 'danger')) return;
-            await api.del(`/api/v1/integrations/${id}`);
+            await api.post(`/api/v1/integrations/${id}/delete`);
             toast('Entegrasyon silindi.', 'warning');
             navigate('/settings/integrations');
           }}><i className="bi bi-trash me-1" aria-hidden="true" />Sil</BusyButton>
@@ -356,9 +361,8 @@ function IntegrationEditor() {
           </Card>
         </div>
         <div className="col-xl-5">
-          {info.inbound
-            ? <SetupCard key={refresh} id={id} info={info} />
-            : <SyncCard id={id} info={info} item={item} onSynced={async () => { await reload(); setRefresh((x) => x + 1); }} />}
+          {!info.inbound && <SyncCard id={id} info={info} item={item} onSynced={async () => { await reload(); setRefresh((x) => x + 1); }} />}
+          {(info.inbound || item.settings?.webhookUrl) && <SetupCard key={refresh} id={id} info={info} />}
         </div>
         <div className="col-12">
           <Deliveries id={id} refreshKey={refresh} />

@@ -1,25 +1,58 @@
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Rewrite;
+using Microsoft.AspNetCore.ResponseCompression;
 using GIBFramework.Base.Extensions;
+using GIBFramework.Controllers;
 using GIBFramework.DAL;
 using GIBFramework.Infrastructure.Swagger;
 using GIBFramework.Middleware;
+using GIBFramework.Services.Auth;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(o => o.AddServerHeader = false);
+if (string.IsNullOrWhiteSpace(builder.Configuration["AllowedHosts"])
+    || (!builder.Environment.IsDevelopment()
+        && builder.Configuration["AllowedHosts"]!.Split(';', StringSplitOptions.TrimEntries).Contains("*")))
+{
+    if (Uri.TryCreate(builder.Configuration["App:PublicUrl"], UriKind.Absolute, out var publicUrl)
+        && publicUrl.Scheme == Uri.UriSchemeHttps && publicUrl.UserInfo.Length == 0)
+        builder.Configuration["AllowedHosts"] = publicUrl.IdnHost;
+    else
+        builder.Configuration["AllowedHosts"] = "localhost;127.0.0.1;[::1]";
+}
+if (builder.Configuration.GetValue<bool>("ForwardedHeaders_Enabled")
+    || builder.Configuration.GetValue<bool>("ASPNETCORE_FORWARDEDHEADERS_ENABLED")
+    || builder.Configuration.GetValue<bool>("DOTNET_FORWARDEDHEADERS_ENABLED"))
+{
+    throw new InvalidOperationException("Otomatik forwarded headers ayarını kapatın ve ReverseProxy altında güvenilen vekilleri tanımlayın.");
+}
 builder.Services.AddGibFramework(builder.Configuration, builder.Environment);
 builder.Services.AddSingleton<IpAccessPolicy>();
-builder.Services.AddResponseCompression(options => options.EnableForHttps = true);
+builder.Services.AddResponseCompression(options =>
+{
+    options.EnableForHttps = true;
+    options.MimeTypes = ["text/css", "text/javascript", "application/javascript", "image/svg+xml"];
+});
 
 var app = builder.Build();
 
 app.Services.InitializeGibFramework();
 
+var forwardLimit = builder.Configuration.GetValue("ReverseProxy:ForwardLimit", 1);
+var forwardedForHeader = builder.Configuration["ReverseProxy:ForwardedForHeaderName"] ?? "X-Forwarded-For";
+if (forwardLimit is < 1 or > 5 || forwardedForHeader is not ("X-Forwarded-For" or "CF-Connecting-IP")
+    || (forwardedForHeader == "CF-Connecting-IP" && forwardLimit != 1))
+{
+    throw new InvalidOperationException("ReverseProxy:ForwardLimit 1–5 olmalıdır. CF-Connecting-IP yalnızca tek vekil için kullanılabilir.");
+}
 var forwarded = new ForwardedHeadersOptions
 {
     ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
-    ForwardLimit = 1,
+    ForwardLimit = forwardLimit,
+    ForwardedForHeaderName = forwardedForHeader,
 };
+forwarded.KnownIPNetworks.Clear();
+forwarded.KnownProxies.Clear();
 foreach (var address in builder.Configuration.GetSection("ReverseProxy:KnownProxies").Get<string[]>() ?? [])
 {
     if (!System.Net.IPAddress.TryParse(address, out var proxy))
@@ -29,13 +62,39 @@ foreach (var address in builder.Configuration.GetSection("ReverseProxy:KnownProx
 
     forwarded.KnownProxies.Add(proxy);
 }
-app.UseForwardedHeaders(forwarded);
+foreach (var range in builder.Configuration.GetSection("ReverseProxy:KnownNetworks").Get<string[]>() ?? [])
+{
+    if (!System.Net.IPNetwork.TryParse(range, out var network) || network.PrefixLength == 0)
+    {
+        throw new InvalidOperationException("ReverseProxy:KnownNetworks yalnızca CIDR ağları kabul eder.");
+    }
+
+    forwarded.KnownIPNetworks.Add(network);
+}
+if (forwarded.KnownProxies.Count > 0 || forwarded.KnownIPNetworks.Count > 0)
+    app.UseForwardedHeaders(forwarded);
 
 app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 app.UseMiddleware<SecurityHeadersMiddleware>();
 
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHsts();
+    app.UseHttpsRedirection();
+}
+
 var ipAccess = app.Services.GetRequiredService<IpAccessPolicy>();
+app.Use(async (context, next) =>
+{
+    if (HttpMethods.IsGet(context.Request.Method) && context.Request.Path.Equals(new PathString("/robots.txt"), StringComparison.OrdinalIgnoreCase))
+    {
+        context.Response.ContentType = "text/plain; charset=utf-8";
+        await context.Response.SendFileAsync(Path.Combine(app.Environment.WebRootPath, "robots.txt"), context.RequestAborted);
+        return;
+    }
+    await next(context);
+});
 var deniedBackground = new Lazy<string>(() =>
 {
     var assets = Path.Combine(app.Environment.WebRootPath, "app", "assets");
@@ -44,24 +103,32 @@ var deniedBackground = new Lazy<string>(() =>
 });
 app.Use(async (context, next) =>
 {
-    if (ipAccess.Allows(context.Connection.RemoteIpAddress))
+    var rejection = ipAccess.RejectionReason(context.Connection.RemoteIpAddress);
+    if (rejection is null)
     {
         await next(context);
         return;
     }
 
     var log = context.RequestServices.GetRequiredService<ILogger<IpAccessPolicy>>();
-    log.LogInformation("IP erişimi reddedildi. IP {ClientIp}, yöntem {Method}, istek {TraceIdentifier}.",
-        context.Connection.RemoteIpAddress, context.Request.Method, context.TraceIdentifier);
+    var checkedIp = IpAccessPolicy.FormatAddress(context.Connection.RemoteIpAddress);
+    var correlationId = context.Items[CorrelationIdMiddleware.ItemKey] as string;
+    log.LogInformation("IP erişimi reddedildi. IP {ClientIp}, kural {Rule}, yöntem {Method}, istek {CorrelationId}.",
+        checkedIp, rejection, context.Request.Method, correlationId);
     context.Response.StatusCode = StatusCodes.Status403Forbidden;
     context.Response.Headers.CacheControl = "no-store";
     if (!context.Request.Headers.Accept.ToString().Contains("text/html", StringComparison.OrdinalIgnoreCase))
     {
-        await context.Response.WriteAsJsonAsync(new { code = "IP_ACCESS_DENIED", title = "Bu IP adresinden erişime izin verilmiyor." });
+        const string title = "Bu IP adresinden erişime izin verilmiyor.";
+        if (context.Request.Path.StartsWithSegments("/api/v1/hooks", StringComparison.OrdinalIgnoreCase))
+            await context.Response.WriteAsJsonAsync(new { code = "IP_ACCESS_DENIED", title, clientIp = checkedIp, reason = rejection, correlationId });
+        else
+            await context.Response.WriteAsJsonAsync(new { code = "IP_ACCESS_DENIED", title });
         return;
     }
 
     context.Response.ContentType = "text/html; charset=utf-8";
+    context.Response.Headers.ContentSecurityPolicy = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; frame-ancestors 'none'; sandbox";
     await context.Response.WriteAsync($"""
         <!doctype html><html lang="tr"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
         <title>403 · Erişim reddedildi</title><body style="margin:0;min-height:100vh;display:grid;place-items:center;background-color:#1c3934;background-position:center;background-size:cover;color:white;font:1rem system-ui;{deniedBackground.Value}">
@@ -71,11 +138,23 @@ app.Use(async (context, next) =>
 
 app.UseGibFrameworkSwagger();
 
-if (!app.Environment.IsDevelopment())
+var database = app.Services.GetRequiredService<DatabaseInitialization>();
+var installOptions = app.Services.GetRequiredService<InstallOptions>();
+app.Use(async (context, next) =>
 {
-    app.UseHsts();
-    app.UseHttpsRedirection();
-}
+    if (HttpMethods.IsGet(context.Request.Method) && context.Request.Path == "/"
+        && database.Ready && installOptions.IsConfigured)
+    {
+        var bootstrap = context.RequestServices.GetRequiredService<UserBootstrapper>();
+        if (await bootstrap.IsWebInstallAvailableAsync(context.RequestAborted))
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            context.Response.Redirect("/install");
+            return;
+        }
+    }
+    await next(context);
+});
 
 app.UseRewriter(new RewriteOptions().AddRewrite("^(?:app/?)?$", "app/index.html", skipRemainingRules: true));
 app.UseWhen(ctx => ctx.Request.Path.StartsWithSegments("/app/assets"), assets => assets.UseResponseCompression());
@@ -95,10 +174,9 @@ app.UseStaticFiles(new StaticFileOptions
 });
 
 app.UseRouting();
-var database = app.Services.GetRequiredService<DatabaseInitialization>();
 app.Use(async (context, next) =>
 {
-    if (database.Configured && !database.Ready
+    if (database.Configured && !database.Ready && !context.Request.Path.Equals(new PathString("/api/v1/install"), StringComparison.OrdinalIgnoreCase)
         && (context.Request.Path.StartsWithSegments("/api") || context.Request.Path.StartsWithSegments("/f")))
     {
         context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
@@ -129,6 +207,7 @@ app.MapGet("/health/ready", async (ReadinessCheck check, HttpContext context, Ca
             : Results.Json(new { status = "unavailable" }, statusCode: StatusCodes.Status503ServiceUnavailable);
     })
     .AllowAnonymous()
+    .RequireRateLimiting(PublicInvoiceController.RateLimitPolicy)
     .WithName("Health_Ready")
     .WithSummary("Veritabanı ve üretim yapılandırması hazırlık denetimi")
     .WithTags("Sistem");

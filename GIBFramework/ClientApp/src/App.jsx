@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect } from 'react';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router';
 import { MFA_REQUIRED_EVENT, PASSWORD_CHANGE_EVENT } from './api.js';
 import { AnnouncementPopup } from './components/AnnouncementPopup.jsx';
+import { Install } from './pages/Install.jsx';
 import { Layout } from './components/Layout.jsx';
 import { ErrorAlert, Spinner, useToast } from './components/ui.jsx';
 import { useSession } from './session.jsx';
@@ -20,7 +21,7 @@ import { Announcements } from './pages/Announcements.jsx';
 import { Customers } from './pages/Customers.jsx';
 import { Products } from './pages/Products.jsx';
 import { SettingsHub, SettingsShell } from './pages/settings/SettingsLayout.jsx';
-import { IpAccessSettings, SecuritySettings } from './pages/settings/SecuritySettings.jsx';
+import { IpAccessSettings, OutboundNetworkSettings, SecuritySettings } from './pages/settings/SecuritySettings.jsx';
 import { AppearanceSettings } from './pages/settings/AppearanceSettings.jsx';
 import { CertificateSettings, SystemSettings } from './pages/settings/SystemSettings.jsx';
 import { CompanySettings } from './pages/settings/CompanySettings.jsx';
@@ -49,9 +50,14 @@ function useIdleLogout() {
     if (!minutes) return undefined;
     let timer;
     const expire = async () => {
-      await session.logout();
-      toast('Hareketsizlik nedeniyle oturum kapatıldı.', 'info');
-      navigate('/login');
+      try {
+        await session.logout();
+        toast('Hareketsizlik nedeniyle oturum kapatıldı.', 'info');
+        navigate('/login');
+      } catch (error) {
+        toast.error(error);
+        timer = setTimeout(expire, 30000);
+      }
     };
     const reset = () => {
       clearTimeout(timer);
@@ -87,6 +93,7 @@ function Guard({ policy, children }) {
 }
 
 export default function App() {
+  const toast = useToast();
   const session = useSession();
   const navigate = useNavigate();
   const location = useLocation();
@@ -106,6 +113,8 @@ export default function App() {
     };
   }, [navigate, session.reload]);
 
+  if (location.pathname === '/install') return <Install />;
+
   if (session.loading) {
     return <div className="d-flex justify-content-center align-items-center min-vh-100"><Spinner /></div>;
   }
@@ -116,7 +125,7 @@ export default function App() {
       <ErrorAlert error={session.error} />
       <button className="btn btn-primary me-2" onClick={session.reload}>Tekrar dene</button>
       {session.tenantOverride && <button className="btn btn-outline-secondary me-2" onClick={() => session.selectTenant(null)}>Firma seçimini kaldır</button>}
-      <button className="btn btn-outline-secondary" onClick={session.logout}>Oturumu kapat</button>
+      <button className="btn btn-outline-secondary" onClick={() => session.logout().catch(toast.error)}>Oturumu kapat</button>
     </main>;
   }
 
@@ -148,6 +157,7 @@ export default function App() {
         <Route path="/settings/account" element={<Guard><InSettings><Account /></InSettings></Guard>} />
         <Route path="/settings/security" element={<Guard policy="SecurityManage"><SecuritySettings /></Guard>} />
         <Route path="/settings/security/ip-access" element={<Guard policy="IpAccessManage"><IpAccessSettings /></Guard>} />
+        <Route path="/settings/security/outbound-network" element={<Guard policy="PlatformAdmin"><OutboundNetworkSettings /></Guard>} />
         <Route path="/settings/certificate" element={<Guard><CertificateSettings /></Guard>} />
         <Route path="/settings/appearance" element={<Guard><AppearanceSettings /></Guard>} />
         <Route path="/settings/system" element={<Guard policy="SystemRead"><SystemSettings /></Guard>} />

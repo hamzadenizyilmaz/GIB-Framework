@@ -111,6 +111,19 @@ public sealed class MessageRepository(SqlConnectionFactory connections)
         return await ReadAllAsync(cmd, ct);
     }
 
+    /// <summary>Kuyruktaki belirli bir mesajı hemen göndermek için kilitler (deneme gönderimi).</summary>
+    public async Task<OutboundMessage?> ClaimByIdAsync(Guid tenantId, Guid id, DateTimeOffset now, TimeSpan lease, CancellationToken ct)
+    {
+        await using var c = await connections.OpenSystemAsync(ct);
+        await using var cmd = c.Command("""
+            UPDATE dbo.Messages SET Status = 'Sending', Attempts = Attempts + 1, NextAttemptAt = @lease, LeaseId = @leaseId
+            OUTPUT inserted.*
+             WHERE Id = @id AND TenantId = @t AND Status = 'Queued'
+            """);
+        cmd.With("@id", id).With("@t", tenantId).With("@lease", now.Add(lease)).With("@leaseId", Guid.NewGuid());
+        return (await ReadAllAsync(cmd, ct)).FirstOrDefault();
+    }
+
     public async Task<bool> MarkSentAsync(OutboundMessage message, string? providerId, DateTimeOffset at, CancellationToken ct)
     {
         await using var c = await connections.OpenSystemAsync(ct);
@@ -360,16 +373,19 @@ public sealed class IntegrationRepository(SqlConnectionFactory connections)
         await cmd.With("@id", id).With("@t", tenantId).With("@at", at).ExecuteNonQueryAsync(ct);
     }
 
-    public async Task<bool> LinkOrderAsync(Guid integrationId, string externalId, Guid tenantId, Guid invoiceId, DateTimeOffset at, CancellationToken ct)
+    public async Task LinkOrderAsync(DbScope scope, Guid integrationId, string externalId, Guid tenantId, Guid invoiceId, DateTimeOffset at, CancellationToken ct)
     {
-        await using var c = await connections.OpenForTenantAsync(tenantId, ct);
-        await using var cmd = c.Command("""
+        await using var cmd = scope.Connection.Command("""
             INSERT dbo.IntegrationOrders (IntegrationId, ExternalId, TenantId, InvoiceId, CreatedAt)
             SELECT @i, @e, @t, @inv, @at
             WHERE NOT EXISTS (SELECT 1 FROM dbo.IntegrationOrders WITH (UPDLOCK, HOLDLOCK)
                 WHERE IntegrationId = @i AND ExternalId = @e AND TenantId = @t)
-            """);
-        return await cmd.With("@i", integrationId).With("@e", externalId).With("@t", tenantId).With("@inv", invoiceId).With("@at", at).ExecuteNonQueryAsync(ct) == 1;
+            SELECT CASE WHEN EXISTS (
+                SELECT 1 FROM dbo.IntegrationOrders WHERE IntegrationId = @i AND ExternalId = @e AND TenantId = @t AND InvoiceId = @inv
+            ) THEN 1 ELSE 0 END;
+            """, scope.Transaction);
+        if (await cmd.With("@i", integrationId).With("@e", externalId).With("@t", tenantId).With("@inv", invoiceId).With("@at", at).ExecuteScalarAsync(ct) is not 1)
+            throw new ConflictException("INTEGRATION_ORDER_LINK", "Sipariş başka bir fatura ile eşleştirilmiş.");
     }
 
     public async Task<bool> OrderExistsAsync(Guid tenantId, Guid integrationId, string externalId, CancellationToken ct)

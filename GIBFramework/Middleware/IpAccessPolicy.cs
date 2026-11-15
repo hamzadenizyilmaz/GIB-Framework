@@ -26,12 +26,14 @@ public sealed class IpAccessPolicy
     }
 
     public IpAccessSettings GetSettings(Guid? tenantId) => GetSnapshot(tenantId).Settings;
-    public bool Allows(IPAddress? address, Guid? tenantId = null) => GetSnapshot(tenantId).Allows(address);
-
+    public bool Allows(IPAddress? address, Guid? tenantId = null) => RejectionReason(address, tenantId) is null;
+    public string? RejectionReason(IPAddress? address, Guid? tenantId = null) => GetSnapshot(tenantId).RejectionReason(address);
+    public static string? FormatAddress(IPAddress? address) =>
+        (address?.IsIPv4MappedToIPv6 == true ? address.MapToIPv4() : address)?.ToString();
     public IpAccessSettings Save(Guid? tenantId, IpAccessSettings settings, IPAddress? caller)
     {
         var next = Compile(settings);
-        if (!next.Allows(caller)) throw new InvalidOperationException("Bu ayar mevcut IP adresinizin erişimini kapatır.");
+        if (next.RejectionReason(caller) is not null) throw new InvalidOperationException("Bu ayar mevcut IP adresinizin erişimini kapatır.");
         lock (gate)
         {
             var destination = tenantId is { } id ? TenantPath(id) : path;
@@ -84,12 +86,12 @@ public sealed class IpAccessPolicy
 
     private sealed record Snapshot(IpAccessSettings Settings, System.Net.IPNetwork[] Allow, System.Net.IPNetwork[] Deny)
     {
-        public bool Allows(IPAddress? address)
+        public string? RejectionReason(IPAddress? address)
         {
-            if (!Settings.Enabled) return true;
+            if (!Settings.Enabled) return null;
             if (address?.IsIPv4MappedToIPv6 == true) address = address.MapToIPv4();
-            if (address is null) return Allow.Length + Deny.Length == 0;
-            return !Deny.Any(network => network.Contains(address)) && (Allow.Length == 0 || Allow.Any(network => network.Contains(address)));
-        }
-    }
+            if (address is null) return Allow.Length + Deny.Length == 0 ? null : "missingAddress";
+            if (Deny.Any(network => network.Contains(address))) return "denyList";
+            return Allow.Length == 0 || Allow.Any(network => network.Contains(address)) ? null : "allowList";
+        }    }
 }

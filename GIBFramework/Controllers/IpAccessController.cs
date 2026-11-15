@@ -20,6 +20,7 @@ public sealed class IpAccessController(IpAccessPolicy policy, IAuditTrail audit,
     }
 
     [HttpPut]
+    [HttpPost("update")]
     public async Task<IActionResult> Put(IpAccessSettings payload, CancellationToken ct)
     {
         var scope = Scope;
@@ -41,7 +42,6 @@ public sealed class IpAccessController(IpAccessPolicy policy, IAuditTrail audit,
     {
         settings.Enabled, settings.Allow, settings.Deny,
         scope = scope.HasValue ? "Tenant" : "Platform",
-        clientIp = HttpContext.Connection.RemoteIpAddress is { IsIPv4MappedToIPv6: true } mapped
-            ? mapped.MapToIPv4().ToString() : HttpContext.Connection.RemoteIpAddress?.ToString(),
+        clientIp = IpAccessPolicy.FormatAddress(HttpContext.Connection.RemoteIpAddress),
     });
 }

@@ -52,8 +52,13 @@ public sealed partial class NotificationService(
     public async Task<NotificationResult> NotifyAsync(NotificationRequest request, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var def = TemplateCatalog.Find(request.TemplateKey) ?? throw new NotFoundException($"Şablon bulunamadı: {request.TemplateKey}");
         var config = await settings.GetAsync(request.TenantId, ct);
+        var def = TemplateCatalog.Find(request.TemplateKey)
+            ?? (request.TemplateKey.StartsWith(TemplateCatalog.CustomPrefix, StringComparison.Ordinal)
+                && Guid.TryParseExact(request.TemplateKey[TemplateCatalog.CustomPrefix.Length..], "N", out var customId)
+                && config.CustomTemplates.FirstOrDefault(t => t.Id == customId) is { } custom
+                    ? TemplateCatalog.CustomDefinition(custom) : null)
+            ?? throw new NotFoundException($"Şablon bulunamadı: {request.TemplateKey}");
         var (values, brand) = await ContextAsync(request.TenantId, config, ct);
         foreach (var (k, v) in request.Values)
         {

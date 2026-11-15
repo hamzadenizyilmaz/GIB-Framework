@@ -104,6 +104,25 @@ public sealed record TenantSettingsRequest
 
 public sealed record UpdateCompanyRequest
 {
+    /// <summary>VKN (10) / TCKN (11). Boşsa değişmez. Düzenlenmiş fatura varken değiştirilemez.</summary>
+    [StringLength(11)]
+    public string? TaxId { get; init; }
+
+    public PartyKind? Kind { get; init; }
+
+    [StringLength(100)]
+    public string? FirstName { get; init; }
+
+    [StringLength(100)]
+    public string? FamilyName { get; init; }
+
+    [StringLength(100)]
+    public string? Country { get; init; }
+
+    /// <summary>e-Fatura gönderici birim etiketi (GB alias).</summary>
+    [StringLength(200)]
+    public string? Alias { get; init; }
+
     [StringLength(30)]
     public string? Fax { get; init; }
 

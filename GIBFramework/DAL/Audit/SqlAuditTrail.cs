@@ -30,6 +30,11 @@ public sealed class SqlAuditTrail(SqlConnectionFactory connections, ITenantConte
         AppendCoreAsync(tenantId, context.UserId, CurrentActor,
             entry, null, system: false, cancellationToken);
 
+    public Task<AuditEvent> AppendAuthenticationAsync(Guid tenantId, string? userCode, IReadOnlyList<string> roles, string? ip,
+        AuditEntry entry, CancellationToken cancellationToken) =>
+        AppendCoreAsync(tenantId, userCode, userCode is null ? ActorType.System : ActorType.User, entry, null, system: false,
+            cancellationToken, roles, ip);
+
     public async Task<IReadOnlyList<AuditEvent>> ListAsync(Guid tenantId, string? entityId, int take, long? beforeSequence,
         CancellationToken cancellationToken, string? userId = null, string? action = null, string? role = null,
         DateTimeOffset? from = null, DateTimeOffset? until = null, string? result = null)
@@ -38,7 +43,8 @@ public sealed class SqlAuditTrail(SqlConnectionFactory connections, ITenantConte
         await using var cmd = connection.Command("""
             SELECT TOP (@take) * FROM dbo.AuditEvents
              WHERE TenantId = @t AND (@e IS NULL OR EntityId = @e) AND (@b IS NULL OR Sequence < @b)
-               AND (@u IS NULL OR UserId = @u) AND (@a IS NULL OR Action = @a)
+               AND (@u IS NULL OR UserId = @u OR (UserId = N'system' AND Action LIKE 'AUTH[_]%' AND EntityType = 'User' AND EntityId = @u))
+               AND (@a IS NULL OR Action = @a)
                AND (@from IS NULL OR TimestampUtc >= @from) AND (@until IS NULL OR TimestampUtc < @until)
                AND (@result IS NULL OR Result = @result)
                AND (@role IS NULL OR EXISTS (
@@ -80,7 +86,9 @@ public sealed class SqlAuditTrail(SqlConnectionFactory connections, ITenantConte
         AuditEntry entry,
         DbScope? scope,
         bool system,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyList<string>? actorRoles = null,
+        string? actorIp = null)
     {
         SqlConnection? owned = null;
         SqlTransaction? ownedTx = null;
@@ -110,6 +118,8 @@ public sealed class SqlAuditTrail(SqlConnectionFactory connections, ITenantConte
                 previous = (string?)await last.With("@t", tenantId).ExecuteScalarAsync(cancellationToken) ?? string.Empty;
             }
 
+            var roles = actorRoles ?? context.Roles;
+            var request = http.HttpContext;
             var evt = new AuditEvent
             {
                 EventId = Guid.CreateVersion7(),
@@ -120,14 +130,14 @@ public sealed class SqlAuditTrail(SqlConnectionFactory connections, ITenantConte
                 EntityType = entry.EntityType,
                 EntityId = entry.EntityId,
                 TimestampUtc = clock.UtcNow,
-                Ip = system ? null : context.Ip,
-                UserAgent = system ? null : Truncate(context.UserAgent, 400),
-                CorrelationId = context.CorrelationId,
+                Ip = system ? null : actorIp ?? context.Ip ?? request?.Connection.RemoteIpAddress?.ToString(),
+                UserAgent = system ? null : Truncate(context.UserAgent ?? request?.Request.Headers.UserAgent.ToString(), 400),
+                CorrelationId = context.CorrelationId ?? request?.Items[Middleware.CorrelationIdMiddleware.ItemKey] as string,
                 TraceId = Activity.Current?.TraceId.ToString(),
                 Result = entry.Result,
                 FailureReason = entry.FailureReason,
-                DataJson = !system && context.Roles.Count > 0
-                    ? JsonDefaults.Serialize(new { actorRoles = context.Roles, details = entry.Data })
+                DataJson = !system && roles.Count > 0
+                    ? JsonDefaults.Serialize(new { actorRoles = roles, details = entry.Data })
                     : entry.Data is null ? null : JsonDefaults.Serialize(entry.Data),
                 PreviousHash = previous,
             };

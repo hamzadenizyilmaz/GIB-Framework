@@ -96,10 +96,12 @@ export function InvoiceForm() {
   const ready = Boolean(refs && lines);
 
   useEffect(() => {
-    if (!ready || lookupInfo || customer.taxId.length !== 10 || validateTaxId(customer.taxId)) return undefined;
+    if (!ready || lookupInfo || customer.taxId === ANONYMOUS_TCKN || validateTaxId(customer.taxId)) return undefined;
     const timer = setTimeout(() => autoLookup(), 450);
     return () => clearTimeout(timer);
   }, [ready, customer.taxId, lookupInfo]);
+
+  useEffect(() => () => lookupRequest.current?.controller.abort(), []);
 
   useEffect(() => {
     if (!refs) return;
@@ -149,10 +151,14 @@ export function InvoiceForm() {
   const cur = doc.currency;
   const dueDays = settings.defaults?.paymentDueDays;
 
+  const cancelLookup = () => {
+    lookupRequest.current?.controller.abort();
+    lookupRequest.current = null;
+    setCheckingTaxId(false);
+  };
   const applyCustomer = (c, fromLookup = false) => {
     if (!fromLookup) {
-      lookupRequest.current = null;
-      setCheckingTaxId(false);
+      cancelLookup();
     }
     setCustomer({
       taxId: c.taxId, title: c.title || '', firstName: c.firstName || '', familyName: c.familyName || '', regime: c.regime || 'NotATaxpayer',
@@ -198,11 +204,12 @@ export function InvoiceForm() {
       return;
     }
     if (lookupRequest.current?.taxId === taxId) return;
-    const request = { taxId };
+    const request = { taxId, controller: new AbortController() };
+    const options = { signal: request.controller.signal };
     lookupRequest.current = request;
     setCheckingTaxId(true);
     try {
-      const info = await api.get(`/api/v1/taxpayers/${taxId}`);
+      const info = await api.get(`/api/v1/taxpayers/${taxId}`, options);
       if (lookupRequest.current !== request) return;
       if (info.customer) {
         applyCustomer(info.customer, true);
@@ -211,10 +218,10 @@ export function InvoiceForm() {
       }
       const result = { inSystem: info.inSystem, isEFatura: info.isEFaturaRegistered };
       if (session.can('GibPortal')) {
-        const status = await api.get('/api/v1/gib-portal/status').catch(() => null);
+        const status = await api.get('/api/v1/gib-portal/status', options).catch(() => null);
         if (lookupRequest.current !== request) return;
         if (status?.connected) {
-          const r = await api.get(`/api/v1/gib-portal/recipients/${taxId}`).catch(() => null);
+          const r = await api.get(`/api/v1/gib-portal/recipients/${taxId}`, options).catch(() => null);
           if (lookupRequest.current !== request) return;
           if (r?.found) {
             setCustomer((c) => ({
@@ -231,10 +238,12 @@ export function InvoiceForm() {
         }
       }
       setLookupInfo(result);
-      if (taxId.length === 10 && result.isEFatura) {
+      if (result.isEFatura) {
         setCheckingTaxId(false);
         await dialogs.show('e-Fatura seçildi', <p>Alıcı e-Fatura mükellefi olarak kayıtlı. Belge türü e-Fatura olarak seçildi.</p>);
       }
+    } catch (error) {
+      if (error.code !== 'ABORTED') throw error;
     } finally {
       if (lookupRequest.current === request) {
         lookupRequest.current = null;
@@ -243,7 +252,7 @@ export function InvoiceForm() {
     }
   };
 
-  const buildNotes = () => {
+  const notesList = (() => {
     const list = [];
     if (docType === 'EArsiv') {
       SALE_FIELDS.forEach(([key, label]) => {
@@ -264,7 +273,7 @@ export function InvoiceForm() {
     }
     notes.free.split('\n').map((n) => n.trim()).filter(Boolean).forEach((n) => list.push(n));
     return list;
-  };
+  })();
 
   const submit = async () => {
     setValidated(true);
@@ -321,7 +330,7 @@ export function InvoiceForm() {
         vatExemptionCode: l.vatExemptionCode || null,
         withholdingCode: l.withholdingCode || null,
       })),
-      notes: buildNotes(),
+      notes: notesList,
       orderNumber: trim(doc.orderNumber),
       despatchNumber: trim(doc.despatchNumber),
       despatchRequired: doc.despatchRequired,
@@ -367,7 +376,7 @@ export function InvoiceForm() {
                 <div className="invoice-customer-search position-relative">
                   <input className="form-control form-control-sm" aria-label="Kayıtlı cari ara" placeholder="Kayıtlı cari ara…" value={customerSearch} onChange={(e) => setCustomerSearch(e.target.value)} />
                   {filteredCustomers.length > 0 && (
-                    <div className="list-group position-absolute w-100 shadow mt-1" style={{ zIndex: 20 }}>
+                    <div className="list-group invoice-customer-results w-100 shadow mt-1">
                       {filteredCustomers.map((c) => (
                         <button key={c.id} type="button" className="list-group-item list-group-item-action small" onClick={() => { applyCustomer(c); setCustomerSearch(''); }}>
                           <div className="fw-semibold text-truncate">{c.title}</div>
@@ -381,7 +390,7 @@ export function InvoiceForm() {
               <div className="row g-3">
                 <div className="col-md-5">
                   <label className="form-label" htmlFor="taxId">VKN / TCKN</label>
-                  <TaxIdInput value={customer.taxId} autoFocus anonymous required={false} onChange={(v) => { lookupRequest.current = null; setCheckingTaxId(false); setCustomer((c) => ({ ...c, taxId: v })); setLookupInfo(null); setCard((x) => ({ ...x, known: null, isEFatura: false })); }}
+                  <TaxIdInput value={customer.taxId} autoFocus anonymous required={false} onChange={(v) => { cancelLookup(); setCustomer((c) => ({ ...c, taxId: v })); setLookupInfo(null); setCard((x) => ({ ...x, known: null, isEFatura: false })); }}
                     onBlur={() => { if (customer.taxId.length === 10 && !validateTaxId(customer.taxId) && !lookupInfo) lookup().catch(toast.error); }}
                     append={<BusyButton className="btn btn-outline-primary" onClick={lookup}><i className="bi bi-search me-1" />Sorgula</BusyButton>} />
                   {lookupInfo && (
@@ -467,21 +476,21 @@ export function InvoiceForm() {
                         <label className="form-label" htmlFor={`code-${l.key}`}>Ürün kodu</label>
                         <input className="form-control form-control-sm" id={`code-${l.key}`} maxLength={100} value={l.productCode} onChange={(e) => setL(l.key, { productCode: e.target.value })} />
                       </div>
-                      <div className="col-6 col-md-2">
+                      <div className="col-12 col-sm-6 col-lg-2">
                         <label className="form-label" htmlFor={`q-${l.key}`}>Miktar</label>
                         <input className="form-control form-control-sm text-end" id={`q-${l.key}`} type="number" step="0.0001" min="0.0001" required value={l.quantity} onChange={(e) => setL(l.key, { quantity: e.target.value })} />
                       </div>
-                      <div className="col-6 col-md-2">
+                      <div className="col-12 col-sm-6 col-lg-2">
                         <label className="form-label" htmlFor={`u-${l.key}`}>Birim</label>
                         <select className="form-select form-select-sm" id={`u-${l.key}`} value={l.unitCode} onChange={(e) => setL(l.key, { unitCode: e.target.value })}>
                           {UNITS.map(([c, label]) => <option key={c} value={c}>{label}</option>)}
                         </select>
                       </div>
-                      <div className="col-6 col-md-2">
+                      <div className="col-12 col-sm-6 col-lg-2">
                         <label className="form-label" htmlFor={`pr-${l.key}`}>Birim fiyat ({cur})</label>
                         <input className="form-control form-control-sm text-end" id={`pr-${l.key}`} type="number" step="0.01" min="0" required placeholder="0,00" value={l.unitPrice} onChange={(e) => setL(l.key, { unitPrice: e.target.value })} />
                       </div>
-                      <div className="col-6 col-md-2">
+                      <div className="col-12 col-sm-6 col-lg-2">
                         <label className="form-label" htmlFor={`d-${l.key}`}>İskonto</label>
                         <div className="input-group input-group-sm">
                           <input className="form-control text-end" id={`d-${l.key}`} type="number" step="0.01" min="0" placeholder="0" value={l.discount} onChange={(e) => setL(l.key, { discount: e.target.value })} />
@@ -490,13 +499,13 @@ export function InvoiceForm() {
                           </button>
                         </div>
                       </div>
-                      <div className="col-6 col-md-2">
+                      <div className="col-12 col-sm-6 col-lg-2">
                         <label className="form-label" htmlFor={`v-${l.key}`}>KDV</label>
                         <select className="form-select form-select-sm" id={`v-${l.key}`} value={l.vatRate} onChange={(e) => setL(l.key, { vatRate: e.target.value })}>
                           {defs.vatRates.map((r) => <option key={r} value={String(r)}>%{r}</option>)}
                         </select>
                       </div>
-                      <div className="col-6 col-md-2 text-end">
+                      <div className="col-12 col-sm-6 col-lg-2 text-end">
                         <div className="form-label">Tutar</div>
                         <div className="line-total">{fmtMoney(a.net, cur)}</div>
                       </div>
@@ -574,8 +583,8 @@ export function InvoiceForm() {
                 </div>)}
               </fieldset>}
               <textarea className="form-control" rows={3} maxLength={1000} placeholder="Ek not (her satır ayrı not)" aria-label="Ek not" value={notes.free} onChange={(e) => setNotes((x) => ({ ...x, free: e.target.value }))} />
-              {buildNotes().length > 0 && (
-                <ul className="small text-body-secondary mt-2 mb-0">{buildNotes().map((n, i) => <li key={`${i}-${n}`}>{n}</li>)}</ul>
+              {notesList.length > 0 && (
+                <ul className="small text-body-secondary mt-2 mb-0">{notesList.map((n, i) => <li key={`${i}-${n}`}>{n}</li>)}</ul>
               )}
             </Card>
           </div>

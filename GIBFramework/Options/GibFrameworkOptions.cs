@@ -37,6 +37,15 @@ public sealed class BootstrapOptions
     public bool AdminMustChangePassword { get; set; } = true;
 }
 
+public sealed class InstallOptions
+{
+    public const string Section = "Install";
+
+    public string TokenSha256 { get; set; } = string.Empty;
+
+    public bool IsConfigured => TokenSha256.Length == 64 && TokenSha256.All(Uri.IsHexDigit);
+}
+
 public enum GibPortalEnvironment
 {
     Test,
@@ -75,6 +84,13 @@ public sealed class ComplianceOptions
     public const string Section = "Compliance";
 
     public bool AllowUnapprovedRules { get; set; }
+
+    /// <summary>
+    /// Onaylı (veya kullanılabilir) belge türü kuralı uygulanamadığında belge türünü tarafların hesap türüne göre belirler:
+    /// alıcı ve satıcı e-Fatura kayıtlı → e-Fatura; alıcı kayıtlı değil ve satıcı e-Arşiv kullanıcısı → e-Arşiv.
+    /// Karar engelleyici olmayan bir uyarıyla kayda geçer.
+    /// </summary>
+    public bool AccountTypeRouting { get; set; } = true;
 
     public string SeedPath { get; set; } = "DAL/Seed";
 }

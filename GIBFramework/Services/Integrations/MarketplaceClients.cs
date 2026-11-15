@@ -38,6 +38,8 @@ public abstract class MarketplaceClientBase(IHttpClientFactory httpFactory)
     protected async Task<(int Status, string Body)> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
+        if (request.RequestUri is not { IsAbsoluteUri: true } uri || uri.Scheme != Uri.UriSchemeHttps || uri.UserInfo.Length != 0)
+            throw new MarketplaceException("Pazaryeri adresi kimlik bilgisi içermeyen bir HTTPS adresi olmalıdır.");
         using var client = httpFactory.CreateClient(HttpClientName);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(client.Timeout);
@@ -47,6 +49,8 @@ public abstract class MarketplaceClientBase(IHttpClientFactory httpFactory)
             var status = (int)response.StatusCode;
             switch (status)
             {
+                case >= 300 and < 400:
+                    throw new MarketplaceException($"Pazaryeri API'si beklenmeyen yönlendirme döndürdü (HTTP {status}).", httpStatus: status);
                 case 401 or 403:
                     throw new MarketplaceException($"Pazaryeri kimlik doğrulaması başarısız (HTTP {status}); API bilgilerini ve User-Agent değerini kontrol edin.");
                 case 429:
@@ -273,12 +277,17 @@ public sealed class TrendyolClient(IHttpClientFactory httpFactory, MarketplaceOp
         var lines = Arr(p, "lines").Select(l =>
         {
             var qty = Math.Max(1, Dec(l, "quantity"));
-            var unit = Has(l, "lineUnitPrice") ? Dec(l, "lineUnitPrice") : Has(l, "price") ? Dec(l, "price") : Dec(l, "amount") / qty;
-            var discount = Has(l, "lineSellerDiscount") ? Dec(l, "lineSellerDiscount") : Dec(l, "discount");
-            return new InboundLine(Str(l, "productName") ?? "Ürün", qty, unit, Rate(l, integration, "vatRate", "vatBaseAmount"), discount, null);
+            // Order V2 already subtracts both discounts from lineUnitPrice.
+            var details = Arr(l, "discountDetails").ToArray();
+            var unit = details.Length == qty && details.All(d => Has(d, "lineItemPrice"))
+                ? details.Sum(d => Dec(d, "lineItemPrice")) / qty
+                : Has(l, "lineUnitPrice") || Has(l, "price") ? Dec(l, "lineUnitPrice", "price") : Dec(l, "amount") / qty;
+            return new InboundLine(Str(l, "productName") ?? "Ürün", qty, unit, Rate(l, integration, "vatRate"), 0, null);
         }).ToList();
         var orderNumber = Str(p, "orderNumber") ?? id;
-        return new InboundOrder(id, orderNumber, Str(p, "currencyCode") ?? "TRY", true, customer, lines, [$"Trendyol sipariş no: {orderNumber}", $"Trendyol paket no: {id}"]);
+        decimal? total = Has(p, "packageTotalPrice") ? Dec(p, "packageTotalPrice") : null;
+        return new InboundOrder(id, orderNumber, Str(p, "currencyCode") ?? "TRY", true, customer, lines,
+            [$"Trendyol sipariş no: {orderNumber}", $"Trendyol paket no: {id}"], total);
     }
 
     public async Task<string> SendInvoiceLinkAsync(Integration integration, IReadOnlyDictionary<string, string> secrets, MarketplaceInvoiceLink link, CancellationToken ct)
@@ -527,7 +536,7 @@ public sealed class N11Client(IHttpClientFactory httpFactory, MarketplaceOptions
     {
         ArgumentNullException.ThrowIfNull(integration);
         ArgumentNullException.ThrowIfNull(link);
-        if (!link.Link.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) || (!link.Link.StartsWith("https://", StringComparison.OrdinalIgnoreCase) && options.N11InvoiceSoapUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase)))
+        if (!link.Link.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) || !link.Link.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
         {
             throw new MarketplaceException("n11 fatura linki HTTPS olmalı ve .pdf ile bitmelidir; App:PublicUrl değerini HTTPS alan adınızla ayarlayın.");
         }
@@ -550,6 +559,8 @@ public sealed class N11Client(IHttpClientFactory httpFactory, MarketplaceOptions
         using var request = new HttpRequestMessage(HttpMethod.Post, InvoiceSoap) { Content = new StringContent(envelope, Encoding.UTF8, "text/xml") };
         request.Headers.TryAddWithoutValidation("SOAPAction", "\"\"");
         var (code, body) = await SendAsync(request, ct);
+        if (code is < 200 or >= 300)
+            throw new MarketplaceException($"n11 fatura linki HTTP {code}.", httpStatus: code);
         XDocument xml;
         try
         {
@@ -560,7 +571,8 @@ public sealed class N11Client(IHttpClientFactory httpFactory, MarketplaceOptions
             throw new MarketplaceException($"n11 fatura linki HTTP {code}: {TrendyolClient.Short(body)}");
         }
 
-        var status = xml.Descendants().FirstOrDefault(e => e.Name.LocalName == "status")?.Value;
+        var result = xml.Descendants().FirstOrDefault(e => e.Name.LocalName == "result");
+        var status = result?.Elements().FirstOrDefault(e => e.Name.LocalName == "status")?.Value;
         if (string.Equals(status, "success", StringComparison.OrdinalIgnoreCase))
         {
             return "success";

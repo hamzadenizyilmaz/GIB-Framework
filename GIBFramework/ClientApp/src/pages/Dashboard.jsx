@@ -53,6 +53,7 @@ function MonthlyChart({ groups, currency }) {
   return (
     <div className="ivory-chart">
       <div className="ivory-chart-summary"><strong>{fmtMoney(totals.reduce((sum, total) => sum + total, 0), currency)}</strong><small>6 aylık toplam</small></div>
+      <div className="ivory-chart-scroll" tabIndex={0} role="region" aria-label="Altı aylık fatura grafiği">
       <svg viewBox="0 0 590 207" role="img" aria-label={months.map((mo, i) => `${mo.label}: ${fmtMoney(totals[i], currency)}`).join(', ')}>
         <defs><linearGradient id={gradient} x1="0" y1="0" x2="0" y2="1"><stop stopColor="currentColor" stopOpacity=".22" /><stop offset="100%" stopColor="currentColor" stopOpacity=".02" /></linearGradient></defs>
         {ticks.map((tick) => {
@@ -66,6 +67,7 @@ function MonthlyChart({ groups, currency }) {
           <text x={x} y="194" textAnchor="middle">{months[index].label}</text>
         </g>)}
       </svg>
+      </div>
     </div>
   );
 }
@@ -148,7 +150,7 @@ export function Dashboard() {
       </Card> : (
         <>
           {invoices && (
-            <div className="row row-cols-2 row-cols-xl-4 g-3 mb-4">
+            <div className="row row-cols-1 row-cols-sm-2 row-cols-xl-4 g-3 mb-4">
               <div className="col"><Kpi icon="file-earmark-text" color="secondary" label="Bu ayın belgeleri" value={count(groups.filter((i) => i.month?.startsWith(thisMonth)))} /></div>
               <div className="col"><Kpi icon="cash-stack" color="success" label={`Bu ayın cirosu · ${currency}`} value={fmtMoney(monthTotal, currency)} hint={`${count(monthItems)} düzenlenen fatura`} /></div>
               <div className="col"><Kpi icon="clock" color="warning" label="Onay bekleyen" value={count(groups.filter((i) => i.status === 'AwaitingApproval'))} /></div>
@@ -186,7 +188,7 @@ export function Dashboard() {
                               <td className="mono"><Link to={`/invoices/${i.id}`}>{i.documentNumber || i.draftNumber}</Link></td>
                               <td>{fmtDate(i.issueDate)}</td>
                               <td><DocTypeBadge type={i.documentType} /></td>
-                              <td><div className="text-truncate" style={{ maxWidth: '16rem' }}>{i.customerTitle || i.customerTaxId}</div></td>
+                              <td><div className="invoice-result-customer">{i.customerTitle || i.customerTaxId}</div></td>
                               <td className="num">{fmtMoney(i.payableAmount, i.currency)}</td>
                               <td><StatusBadge status={i.status} /></td>
                             </tr>

@@ -179,7 +179,7 @@ public sealed class NetgsmClient(IHttpClientFactory httpFactory, MessagingOption
 
     private async Task<string> SendTextAsync(HttpRequestMessage request, CancellationToken ct)
     {
-        var client = httpFactory.CreateClient(HttpClientName);
+        using var client = httpFactory.CreateClient(HttpClientName);
         HttpResponseMessage response;
         try
         {
@@ -228,7 +228,13 @@ public sealed class NetgsmClient(IHttpClientFactory httpFactory, MessagingOption
     private static string? Prop(JsonElement root, string name) =>
         root.ValueKind == JsonValueKind.Object && root.TryGetProperty(name, out var v) && v.ValueKind != JsonValueKind.Null ? v.ToString() : null;
 
-    private Uri Url(string path) => new(options.NetgsmBaseUrl.TrimEnd('/') + path);
+    private Uri Url(string path)
+    {
+        if (!Uri.TryCreate(options.NetgsmBaseUrl, UriKind.Absolute, out var uri)
+            || uri.Scheme != Uri.UriSchemeHttps || uri.UserInfo.Length != 0 || uri.Query.Length != 0 || uri.Fragment.Length != 0)
+            throw new NetgsmException("INVALID_URL", "Netgsm adresi HTTPS kullanmalıdır.");
+        return new Uri(uri.AbsoluteUri.TrimEnd('/') + path);
+    }
 
     private static void Authorize(HttpRequestMessage request, NetgsmCredentials credentials) =>
         request.Headers.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes($"{credentials.UserCode}:{credentials.Password}")));

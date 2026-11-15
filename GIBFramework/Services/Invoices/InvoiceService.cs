@@ -20,6 +20,7 @@ public sealed record Actor(string UserId, bool IsSystem)
 }
 
 public sealed record CustomerCardOptions(bool Save, bool? IsEFaturaRegistered);
+public sealed record InvoiceOrderLink(Guid IntegrationId, string ExternalId, decimal? ExpectedTotal);
 
 public sealed partial class InvoiceService(
     SqlConnectionFactory connections,
@@ -37,6 +38,7 @@ public sealed partial class InvoiceService(
     ProviderRegistry providers,
     ICustomerRepository customers,
     DAL.Messaging.OutboxEventRepository events,
+    DAL.Messaging.IntegrationRepository integrationOrders,
     ITenantContext context,
     IClock clock,
     WorkflowOptions workflow,
@@ -48,7 +50,8 @@ public sealed partial class InvoiceService(
     private const string DraftSeriesKind = "Draft";
     private const string DraftSeriesPrefix = "TSL";
 
-    public async Task<(Invoice Invoice, bool Created)> CreateDraftAsync(Invoice draft, string? idempotencyKey, CancellationToken ct, CustomerCardOptions? customerCard = null)
+    public async Task<(Invoice Invoice, bool Created)> CreateDraftAsync(
+        Invoice draft, string? idempotencyKey, CancellationToken ct, CustomerCardOptions? customerCard = null, InvoiceOrderLink? order = null)
     {
         ArgumentNullException.ThrowIfNull(draft);
         var (tenantId, actor) = Who();
@@ -60,6 +63,7 @@ public sealed partial class InvoiceService(
         await using var conn = await connections.OpenForTenantAsync(tenantId, ct);
         if (await invoices.GetByIdempotencyKeyAsync(conn, tenantId, idempotencyKey, ct) is { } existing)
         {
+            await EnsureOrderLinkAsync(conn, existing, order, ct);
             return (existing, false);
         }
 
@@ -74,14 +78,6 @@ public sealed partial class InvoiceService(
             throw new ValidationFailedException("CUSTOMER_TAX_ID", "Alıcı VKN/TCKN geçersiz.", [idError.Message]);
         }
 
-        var card = await customers.GetByTaxIdAsync(tenantId, draft.Customer.TaxId, ct);
-        if (customerCard is { Save: true } && draft.Customer.TaxId != TaxIdentifier.AnonymousConsumer)
-        {
-            card = await SaveCustomerCardAsync(tenantId, actor, draft.Customer, card, customerCard.IsEFaturaRegistered, ct);
-        }
-
-        draft.Customer.IsEFaturaRegistered = card is { IsActive: true, IsEFaturaRegistered: true };
-        draft.Customer.Alias ??= draft.Customer.IsEFaturaRegistered ? card!.EFaturaAlias : null;
         draft.Supplier = JsonDefaults.Deserialize<InvoiceParty>(JsonDefaults.Serialize(tenant.Profile));
 
         var now = clock.UtcNow;
@@ -109,6 +105,18 @@ public sealed partial class InvoiceService(
         {
             throw new ValidationFailedException("INVOICE_TAX", "Vergi hesaplaması doğrulanamadı.", [.. taxIssues.Select(i => $"{i.Code}: {i.Message}")]);
         }
+        if (order?.ExpectedTotal is { } expected && draft.Totals.PayableAmount != TaxEngine.Round(expected))
+            throw new ValidationFailedException("INTEGRATION_TOTAL_MISMATCH", "Kaynak toplamı ile hesaplanan fatura toplamı uyuşmuyor.",
+                [$"Kaynak: {expected:F2}, hesaplanan: {draft.Totals.PayableAmount:F2} {draft.Currency}"]);
+
+        var card = await customers.GetByTaxIdAsync(tenantId, draft.Customer.TaxId, ct);
+        if (customerCard is { Save: true } && draft.Customer.TaxId != TaxIdentifier.AnonymousConsumer)
+        {
+            card = await SaveCustomerCardAsync(tenantId, actor, draft.Customer, card, customerCard.IsEFaturaRegistered, ct);
+        }
+        draft.Customer.IsEFaturaRegistered = card is { IsActive: true, IsEFaturaRegistered: true }
+            || (customerCard?.IsEFaturaRegistered == true && draft.Customer.TaxId != TaxIdentifier.AnonymousConsumer);
+        draft.Customer.Alias ??= draft.Customer.IsEFaturaRegistered ? card?.EFaturaAlias : null;
 
         ApplyDecision(draft, compliance.Evaluate(draft.ToComplianceContext()));
         if (draft.DocumentType == EDocumentType.PaperInvoice)
@@ -122,9 +130,12 @@ public sealed partial class InvoiceService(
         try
         {
             var scope = await connections.BeginAsync(conn, ct);
+            await using var transaction = scope.Transaction;
             var draftNumber = await numbers.AllocateAsync(new DocumentSeriesKey(tenantId, DraftSeriesKind, DraftSeriesPrefix, draft.IssueDate.Year), conn, scope.Transaction, ct);
             draft.DraftNumber = draftNumber.Value;
             await invoices.InsertAsync(draft, scope, ct);
+            if (order is not null)
+                await integrationOrders.LinkOrderAsync(scope, order.IntegrationId, order.ExternalId, tenantId, draft.Id, now, ct);
             await invoices.AddHistoryAsync(scope, draft, null, actor.UserId, "Taslak oluşturuldu", ct);
             await PublishAsync(scope, draft, InvoiceEvents.Created, null, actor, null, ct);
             await AuditAsync(scope, tenantId, actor, "INVOICE_CREATED", draft, new { draft.DocumentType, draft.Totals.PayableAmount, decision = draft.Decision!.DecisionId }, ct);
@@ -141,8 +152,18 @@ public sealed partial class InvoiceService(
                 throw;
             }
 
+            await EnsureOrderLinkAsync(again, winner, order, ct);
             return (winner, false);
         }
+    }
+
+    private async Task EnsureOrderLinkAsync(Microsoft.Data.SqlClient.SqlConnection conn, Invoice invoice, InvoiceOrderLink? order, CancellationToken ct)
+    {
+        if (order is null) return;
+        var scope = await connections.BeginAsync(conn, ct);
+        await using var transaction = scope.Transaction;
+        await integrationOrders.LinkOrderAsync(scope, order.IntegrationId, order.ExternalId, invoice.TenantId, invoice.Id, clock.UtcNow, ct);
+        await transaction.CommitAsync(ct);
     }
 
     public async Task<Invoice> SubmitAsync(Guid id, CancellationToken ct)

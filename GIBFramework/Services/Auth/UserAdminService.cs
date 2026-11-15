@@ -1,8 +1,12 @@
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Identity;
+using GIBFramework.Base.Extensions;
+using GIBFramework.DAL;
 using GIBFramework.DAL.Identity;
+using GIBFramework.DAL.Tenants;
 using GIBFramework.Models.Audit;
 using GIBFramework.Models.Identity;
+using GIBFramework.Models.Tenancy;
 
 namespace GIBFramework.Services.Auth;
 
@@ -225,31 +229,86 @@ public sealed partial class UserAdminService(
     private static partial Regex UserCodePattern();
 }
 
-public sealed partial class UserBootstrapper(IUserRepository users, IPasswordHasher<UserAccount> hasher, BootstrapOptions options, IClock clock, ILogger<UserBootstrapper> logger)
+public sealed partial class UserBootstrapper(SqlConnectionFactory connections, IAuditTrail audit, IPasswordHasher<UserAccount> hasher, BootstrapOptions options, IClock clock, ILogger<UserBootstrapper> logger)
 {
     public async Task EnsureAdminAsync(CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(options.AdminUserCode) || string.IsNullOrWhiteSpace(options.AdminPassword) || await users.AnyAsync(ct))
+        if (string.IsNullOrWhiteSpace(options.AdminUserCode) || string.IsNullOrWhiteSpace(options.AdminPassword))
         {
             return;
+        }
+
+        await TryCreateAsync(options.AdminUserCode, options.AdminPassword, options.AdminMustChangePassword, ct);
+    }
+
+    public async Task<bool> IsWebInstallAvailableAsync(CancellationToken ct)
+    {
+        await using var connection = await connections.OpenSystemAsync(ct);
+        await using var command = connection.Command($"SELECT CASE WHEN {WebInstallClosed} THEN 0 ELSE 1 END");
+        return await command.ExecuteScalarAsync(ct) is 1;
+    }
+
+    private const string WebInstallClosed = """
+        EXISTS (SELECT 1 FROM dbo.Users)
+        OR EXISTS (SELECT 1 FROM dbo.Tenants)
+        OR EXISTS (SELECT 1 FROM dbo.AuditEvents WHERE TenantId = '00000000-0000-0000-0000-000000000000' AND Action = 'INSTALL_COMPLETED')
+        """;
+
+    public async Task<bool> TryCreateAsync(string userCode, string password, bool mustChangePassword, CancellationToken ct,
+        Tenant? tenant = null, string? ownerCode = null, string? ownerPassword = null)
+    {
+        await using var connection = await connections.OpenSystemAsync(ct);
+        var scope = await connections.BeginAsync(connection, ct);
+        await using var transaction = scope.Transaction;
+        await using var command = connection.Command("""
+            DECLARE @lock int;
+            EXEC @lock = sys.sp_getapplock @Resource = N'GIBFramework.FirstAdministrator', @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 5000;
+            IF @lock < 0 THROW 51140, N'Kurulum kilidi alınamadı.', 1;
+            SELECT CASE WHEN EXISTS (SELECT 1 FROM dbo.Users WITH (UPDLOCK, HOLDLOCK) WHERE TenantId IS NULL) THEN 1 ELSE 0 END;
+            """, transaction);
+        if (await command.ExecuteScalarAsync(ct) is 1)
+            return false;
+
+        if (tenant is not null)
+        {
+            await using var check = connection.Command($"SELECT CASE WHEN {WebInstallClosed} THEN 1 ELSE 0 END", transaction);
+            if (await check.ExecuteScalarAsync(ct) is 1)
+                return false;
         }
 
         var now = clock.UtcNow;
         var admin = new UserAccount
         {
             Id = Guid.CreateVersion7(now),
-            UserCode = UserRepository.Normalize(options.AdminUserCode),
+            UserCode = UserRepository.Normalize(userCode),
             DisplayName = "Platform Yöneticisi",
             Roles = [Roles.PlatformSuperAdmin],
             IsActive = true,
-            MustChangePassword = options.AdminMustChangePassword,
+            MustChangePassword = mustChangePassword,
             SecurityStamp = Guid.NewGuid(),
             CreatedAt = now,
             UpdatedAt = now,
         };
-        admin.PasswordHash = hasher.HashPassword(admin, options.AdminPassword);
-        await users.InsertAsync(admin, ct);
+        admin.PasswordHash = hasher.HashPassword(admin, password);
+        await UserRepository.InsertCoreAsync(admin, connection, transaction, ct);
+        await audit.AppendSystemAsync(Guid.Empty, new AuditEntry("PLATFORM_ADMIN_CREATED", "User", admin.UserCode), scope, ct);
+        if (tenant is not null)
+        {
+            await TenantRepository.CreateCoreAsync(tenant, connection, transaction, ct);
+            var owner = new UserAccount
+            {
+                Id = Guid.CreateVersion7(now), TenantId = tenant.Id, UserCode = ownerCode!, DisplayName = "Firma Sahibi",
+                Roles = [Roles.TenantOwner], IsActive = true, SecurityStamp = Guid.NewGuid(), CreatedAt = now, UpdatedAt = now,
+            };
+            owner.PasswordHash = hasher.HashPassword(owner, ownerPassword!);
+            await UserRepository.InsertCoreAsync(owner, connection, transaction, ct);
+            await audit.AppendSystemAsync(tenant.Id, new AuditEntry("TENANT_CREATED", "Tenant", tenant.Id.ToString(), Data: new { tenant.Name }), scope, ct);
+            await audit.AppendSystemAsync(tenant.Id, new AuditEntry("USER_CREATED", "User", owner.UserCode, Data: new { owner.Roles }), scope, ct);
+            await audit.AppendSystemAsync(Guid.Empty, new AuditEntry("INSTALL_COMPLETED", "Tenant", tenant.Id.ToString()), scope, ct);
+        }
+        await transaction.CommitAsync(ct);
         Log.Created(logger, admin.UserCode);
+        return true;
     }
 
     private static partial class Log

@@ -1,11 +1,11 @@
 import { useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import { api } from '../api.js';
 import { fmtDate, fmtMoney, STATUS } from '../format.js';
 import { useSession } from '../session.jsx';
 import { Card, DocTypeBadge, Empty, ErrorAlert, PageHeader, Spinner, StatusBadge, useLoad } from '../components/ui.jsx';
 
-const PAGE_SIZES = [[25, '25'], [50, '50'], [100, '100'], [500, '500'], [5000, 'Tümü']];
+const PAGE_SIZES = [25, 50, 100, 250, 500];
 const EMPTY = { q: '', status: '', documentType: '', from: '', to: '' };
 
 export function InvoiceList() {
@@ -16,7 +16,6 @@ export function InvoiceList() {
 
 function InvoiceResults({ initialQuery }) {
   const session = useSession();
-  const navigate = useNavigate();
   const [draft, setDraft] = useState({ ...EMPTY, q: initialQuery });
   const [filters, setFilters] = useState({ ...EMPTY, q: initialQuery, skip: 0, take: 50 });
 
@@ -67,11 +66,11 @@ function InvoiceResults({ initialQuery }) {
 
       <Card title="Belge kayıtları" bodyClass="invoice-table-body" footer={(
         <div className="d-flex flex-wrap justify-content-between align-items-center gap-2">
-          <div className="d-flex align-items-center gap-2 small text-body-secondary">
+          <div className="d-flex flex-wrap align-items-center gap-2 small text-body-secondary">
             <span>Sayfa başına</span>
             <select className="form-select form-select-sm" style={{ width: 'auto' }} aria-label="Sayfa başına" value={filters.take}
               onChange={(e) => setFilters((f) => ({ ...f, take: Number(e.target.value), skip: 0 }))}>
-              {PAGE_SIZES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              {PAGE_SIZES.map((v) => <option key={v} value={v}>{v}</option>)}
             </select>
             <span>{total ? `${filters.skip + 1}–${filters.skip + rows.length} / ${total}` : ''}</span>
             {rows.length > 0 && <span className="ms-2">Sayfa toplamı (TL): <strong>{fmtMoney(pageSum)}</strong></span>}
@@ -89,25 +88,25 @@ function InvoiceResults({ initialQuery }) {
           : error ? <div className="card-body"><ErrorAlert error={error} /></div>
             : rows.length ? (
               <div className="table-responsive">
-                <table className="table table-hover table-click align-middle mb-0">
+                <table className="table table-hover align-middle mb-0 invoice-results">
                   <thead><tr><th>Belge no</th><th>Tarih</th><th>Tür</th><th>Alıcı</th><th className="num">Ödenecek</th><th>Durum</th><th>Oluşturan</th><th>Güncelleme</th></tr></thead>
                   <tbody>
                     {rows.map((i) => (
-                      <tr key={i.id} onClick={() => navigate(`/invoices/${i.id}`)}>
-                        <td className="mono">
-                          {i.documentNumber || <span className="text-body-secondary">{i.draftNumber}</span>}
+                      <tr key={i.id}>
+                        <td className="mono" data-label="Belge no">
+                          <Link to={`/invoices/${i.id}`}>{i.documentNumber || i.draftNumber || 'Faturayı aç'}</Link>
                           {i.issuanceChannel === 'GibPortal' && <i className="bi bi-bank ms-1 text-warning" title="GİB e-Arşiv Portal" />}
                         </td>
-                        <td>{fmtDate(i.issueDate)}</td>
-                        <td><DocTypeBadge type={i.documentType} /></td>
-                        <td>
-                          <div className="text-truncate" style={{ maxWidth: '22rem' }}>{i.customerTitle || '—'}</div>
+                        <td data-label="Tarih">{fmtDate(i.issueDate)}</td>
+                        <td data-label="Tür"><DocTypeBadge type={i.documentType} /></td>
+                        <td data-label="Alıcı">
+                          <div className="invoice-result-customer">{i.customerTitle || '—'}</div>
                           <div className="small text-body-secondary font-monospace">{i.customerTaxId}</div>
                         </td>
-                        <td className="num">{fmtMoney(i.payableAmount, i.currency)}</td>
-                        <td><StatusBadge status={i.status} /></td>
-                        <td className="small">{i.createdBy}</td>
-                        <td className="small text-body-secondary">{fmtDate(i.updatedAt)}</td>
+                        <td className="num" data-label="Ödenecek">{fmtMoney(i.payableAmount, i.currency)}</td>
+                        <td data-label="Durum"><StatusBadge status={i.status} /></td>
+                        <td className="small" data-label="Oluşturan">{i.createdBy}</td>
+                        <td className="small text-body-secondary" data-label="Güncelleme">{fmtDate(i.updatedAt)}</td>
                       </tr>
                     ))}
                   </tbody>

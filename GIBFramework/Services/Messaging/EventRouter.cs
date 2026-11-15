@@ -12,6 +12,7 @@ public sealed partial class EventRouter(
     OutboxEventRepository events,
     InvoiceDocumentService documents,
     NotificationService notifications,
+    MessagingSettingsService messaging,
     IntegrationService integrations,
     IUserRepository users,
     IClock clock,
@@ -103,7 +104,48 @@ public sealed partial class EventRouter(
                 break;
         }
 
+        await CustomTemplatesAsync(tenantId, evt, invoice, values, publicLink, ct);
         await integrations.RouteAsync(new OutboxEventContext(evt.Id, evt.EventType, invoice, payload.Note, publicLink, panelLink), ct);
+    }
+
+    /// <summary>Firmanın bu olay için oluşturduğu özel bildirim şablonlarını gönderir. Bir şablonun hatası diğerlerini durdurmaz.</summary>
+    private async Task CustomTemplatesAsync(Guid tenantId, OutboxEvent evt, Invoice invoice, Dictionary<string, string?> values, string publicLink, CancellationToken ct)
+    {
+        var config = await messaging.GetAsync(tenantId, ct);
+        foreach (var template in config.CustomTemplates.Where(t => t.Enabled && t.Event == evt.EventType).ToList())
+        {
+            var key = TemplateCatalog.CustomPrefix + template.Id.ToString("N");
+            var scoped = new Dictionary<string, string?>(values, StringComparer.Ordinal);
+            IReadOnlyList<MessageAttachmentRef> attachments = template.AttachInvoice && publicLink.Length > 0
+                ? [new MessageAttachmentRef("InvoicePdf", invoice.Id), new MessageAttachmentRef("InvoiceHtml", invoice.Id), new MessageAttachmentRef("InvoiceXml", invoice.Id)]
+                : [];
+            try
+            {
+                switch (template.Recipient)
+                {
+                    case "Customer":
+                        await NotifyCustomerAsync(tenantId, key, invoice, scoped, attachments, evt.Id, ct);
+                        break;
+                    case "Creator":
+                        await NotifyUsersAsync(tenantId, key, await CreatorAsync(invoice, ct), scoped, invoice, evt.Id, ct);
+                        break;
+                    case "Approvers":
+                        await NotifyUsersAsync(tenantId, key, await UsersWithPolicyAsync(tenantId, Policies.InvoiceApprove, ct), scoped, invoice, evt.Id, ct);
+                        break;
+                    case "Address" when !string.IsNullOrWhiteSpace(template.Address):
+                        scoped["kullanici.ad"] = template.Address;
+                        var email = template.Channel == MessageChannel.Email ? template.Address : null;
+                        var phone = template.Channel == MessageChannel.Sms ? template.Address : null;
+                        await notifications.NotifyAsync(new NotificationRequest(tenantId, key, [new NotificationRecipient(template.Address, email, phone)], scoped, "system",
+                            "Invoice", invoice.Id.ToString(), attachments, OutboxEventId: evt.Id), ct);
+                        break;
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Log.CustomTemplateFailed(logger, template.Id, evt.EventType, ex);
+            }
+        }
     }
 
     private async Task NotifyCustomerAsync(Guid tenantId, string template, Invoice invoice, Dictionary<string, string?> values, IReadOnlyList<MessageAttachmentRef> attachments, long eventId, CancellationToken ct)
@@ -152,5 +194,8 @@ public sealed partial class EventRouter(
     {
         [LoggerMessage(Level = LogLevel.Warning, Message = "Olay {EventId} ({EventType}) işlenemedi.")]
         public static partial void EventFailed(ILogger logger, long eventId, string eventType, Exception exception);
+
+        [LoggerMessage(Level = LogLevel.Warning, Message = "Özel şablon {TemplateId} ({EventType}) gönderilemedi.")]
+        public static partial void CustomTemplateFailed(ILogger logger, Guid templateId, string eventType, Exception exception);
     }
 }

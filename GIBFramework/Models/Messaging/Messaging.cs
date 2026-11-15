@@ -71,6 +71,34 @@ public sealed class TemplateOverride
     public string Body { get; set; } = string.Empty;
 }
 
+/// <summary>Firmanın kendi oluşturduğu, bir fatura olayında gönderilen bildirim şablonu.</summary>
+public sealed class CustomTemplate
+{
+    public Guid Id { get; set; }
+
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>invoice.created, invoice.issued … (InvoiceEvents.Catalog).</summary>
+    public string Event { get; set; } = string.Empty;
+
+    /// <summary>Customer, Creator, Approvers veya Address.</summary>
+    public string Recipient { get; set; } = "Customer";
+
+    /// <summary>Recipient = Address olduğunda sabit e-posta adresi veya cep telefonu.</summary>
+    public string? Address { get; set; }
+
+    public MessageChannel Channel { get; set; }
+
+    public bool Enabled { get; set; } = true;
+
+    public string? Subject { get; set; }
+
+    public string Body { get; set; } = string.Empty;
+
+    /// <summary>E-postaya fatura PDF / HTML / XML eklensin (yalnızca düzenlenmiş faturalarda).</summary>
+    public bool AttachInvoice { get; set; }
+}
+
 public sealed class MessagingSettings
 {
     public SmtpSettings Smtp { get; set; } = new();
@@ -78,6 +106,8 @@ public sealed class MessagingSettings
     public SmsSettings Sms { get; set; } = new();
 
     public List<TemplateOverride> Templates { get; set; } = [];
+
+    public List<CustomTemplate> CustomTemplates { get; set; } = [];
 
     public string? EmailFooter { get; set; }
 

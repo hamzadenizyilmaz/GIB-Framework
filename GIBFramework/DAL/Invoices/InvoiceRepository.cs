@@ -15,7 +15,7 @@ public sealed record InvoiceQuery(
     string? Task = null,
     string? Actor = null)
 {
-    public const int MaxTake = 5000;
+    public const int MaxTake = 500;
 }
 
 public sealed record InvoiceSummary(
@@ -276,12 +276,15 @@ public sealed class InvoiceRepository : IInvoiceRepository
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(statuses);
-        await using var cmd = systemConnection.Command("""
+        var statusParameters = statuses.Select((_, index) => $"@status{index}").ToArray();
+        await using var cmd = systemConnection.Command($"""
             SELECT TOP (@take) TenantId, Id FROM dbo.Invoices
-             WHERE Status IN (SELECT value FROM STRING_SPLIT(@statuses, ',')) AND UpdatedAt <= @before
-             ORDER BY UpdatedAt
+             WHERE Status IN ({string.Join(", ", statusParameters)}) AND UpdatedAt <= @before
+             ORDER BY UpdatedAt, Id
             """);
-        cmd.With("@take", take).With("@statuses", string.Join(',', statuses)).With("@before", updatedBefore);
+        cmd.With("@take", take).With("@before", updatedBefore);
+        for (var i = 0; i < statuses.Count; i++)
+            cmd.With(statusParameters[i], statuses[i].ToString());
         var list = new List<(Guid, Guid)>();
         await using var r = await cmd.ExecuteReaderAsync(cancellationToken);
         while (await r.ReadAsync(cancellationToken))

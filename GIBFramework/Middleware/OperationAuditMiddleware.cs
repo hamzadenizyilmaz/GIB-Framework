@@ -40,12 +40,13 @@ public sealed class OperationAuditMiddleware(RequestDelegate next, ILogger<Opera
             try
             {
                 var id = http.Request.RouteValues.Values.Select(v => v?.ToString()).FirstOrDefault(v => Guid.TryParse(v, out _));
+                var endpoint = route.Metadata.GetMetadata<Microsoft.AspNetCore.Mvc.Controllers.ControllerActionDescriptor>();
                 using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
                 var action = route.RoutePattern.RawText?.StartsWith("api/v1/audit", StringComparison.OrdinalIgnoreCase) == true
                     ? "AUDIT_ACCESSED" : "API_REQUEST";
                 await audit.AppendActorAsync(scope, new AuditEntry(action, "Endpoint", id,
                     outcome < 400 ? "Success" : "Failure",
-                    new { method = http.Request.Method, route = route.RoutePattern.RawText, status = outcome }), deadline.Token);
+                    new { method = http.Request.Method, route = route.RoutePattern.RawText, operation = endpoint?.ActionName, status = outcome }), deadline.Token);
             }
             catch (Exception ex)
             {

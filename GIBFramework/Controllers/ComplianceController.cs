@@ -1,14 +1,17 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using GIBFramework.DAL.LegalSources;
+using GIBFramework.Models.Audit;
 using GIBFramework.Services.Compliance;
 
 namespace GIBFramework.Controllers;
 
+public sealed record RuleReviewRequest([System.ComponentModel.DataAnnotations.StringLength(1000)] string? Note);
+
 [ApiController]
 [Route("api/v1/compliance")]
 [Authorize]
-public sealed class ComplianceController(ComplianceEngine engine) : ControllerBase
+public sealed class ComplianceController(ComplianceEngine engine, ITenantContext tenant, IAuditTrail audit, IClock clock) : ControllerBase
 {
     [HttpPost("evaluate")]
     [Authorize(Policy = Policies.InvoiceCreate)]
@@ -36,13 +39,49 @@ public sealed class ComplianceController(ComplianceEngine engine) : ControllerBa
             r.Severity,
             r.Blocking,
             r.Priority,
-            reviewStatus = r.Review.Status,
+            reviewStatus = engine.Reviews.Effective(r).Status,
             reviewNotes = r.Review.Notes,
-            approvedBy = r.Review.ApprovedBy,
+            approvedBy = engine.Reviews.Effective(r).ApprovedBy,
+            review = engine.Reviews.Effective(r),
+            packageStatus = r.Review.Status,
             legalBasis = r.LegalBasis.Select(b => new { key = b.Key, title = b.Source.Title, uri = b.Source.Uri }),
             parameters = r.Parameters.Values,
         }),
     });
+
+    [HttpPost("rules/{code}/{version:int}/review")]
+    [Authorize(Policy = Policies.RuleApprove)]
+    public async Task<IActionResult> Review(string code, int version, [FromBody] RuleReviewRequest? request, CancellationToken ct)
+    {
+        var rule = Find(code, version);
+        var saved = engine.Reviews.Review(rule, tenant.RequireUser(), request?.Note, clock.UtcNow);
+        await audit.AppendActorAsync(Guid.Empty, new AuditEntry("RULE_REVIEWED", "LegalRule", rule.VersionTag, Data: new { saved.Fingerprint, saved.ReviewNote }), ct);
+        return Ok(engine.Reviews.Effective(rule));
+    }
+
+    [HttpPost("rules/{code}/{version:int}/approve")]
+    [Authorize(Policy = Policies.RuleApprove)]
+    public async Task<IActionResult> Approve(string code, int version, [FromBody] RuleReviewRequest? request, CancellationToken ct)
+    {
+        var rule = Find(code, version);
+        var saved = engine.Reviews.Approve(rule, tenant.RequireUser(), request?.Note, clock.UtcNow);
+        await audit.AppendActorAsync(Guid.Empty, new AuditEntry("RULE_APPROVED", "LegalRule", rule.VersionTag,
+            Data: new { saved.Fingerprint, saved.ReviewedBy, saved.ApprovedBy, saved.ApprovalNote }), ct);
+        return Ok(engine.Reviews.Effective(rule));
+    }
+
+    [HttpPost("rules/{code}/{version:int}/revoke")]
+    [Authorize(Policy = Policies.RuleApprove)]
+    public async Task<IActionResult> Revoke(string code, int version, CancellationToken ct)
+    {
+        var rule = Find(code, version);
+        engine.Reviews.Revoke(rule);
+        await audit.AppendActorAsync(Guid.Empty, new AuditEntry("RULE_REVIEW_REVOKED", "LegalRule", rule.VersionTag), ct);
+        return Ok(engine.Reviews.Effective(rule));
+    }
+
+    private Models.Compliance.LegalRule Find(string code, int version) =>
+        engine.RuleSet.Rules.FirstOrDefault(r => r.Code == code && r.Version == version) ?? throw new NotFoundException("Kural bulunamadı.");
 
     [HttpGet("sources")]
     public IActionResult Sources() => Ok(engine.RuleSet.Sources);

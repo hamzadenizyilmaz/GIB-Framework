@@ -98,3 +98,29 @@ export const UNITS = [
 ];
 
 export const round2 = (v) => Math.round((v + Number.EPSILON) * 100) / 100;
+
+/** "entegrasyon:WHMCS" → { label: 'WHMCS entegrasyonu', icon: 'plug' }; "system" → Sistem. */
+export function actorLabel(value) {
+  if (!value) return { label: '—', icon: null };
+  const integration = /^entegrasyon:(.+)$/i.exec(value);
+  if (integration) return { label: `${integration[1]} entegrasyonu`, icon: 'plug', integration: true };
+  if (value === 'system') return { label: 'Sistem', icon: 'cpu' };
+  return { label: value, icon: 'person' };
+}
+
+const ISSUE_HINTS = {
+  'COMPLIANCE-NO-ROUTING-RULE': ['Belge türü belirlenemedi', 'Onaylı kural yoksa belge türü hesap türüne göre seçilir: bireysel / e-Fatura kayıtsız alıcıya e-Arşiv için Ayarlar › Firma profili › e-Belge kayıtları bölümünde “e-Arşiv kullanıcısı” açık olmalı; e-Fatura için hem firmanız hem alıcı e-Fatura kayıtlı olmalı. Ayarı düzeltip “Doğrulamaya gönder” ile yeniden deneyin.'],
+  'COMPLIANCE-DOCUMENT-TYPE': ['Belge türü belirlenemedi', 'Belge türü belirlenmeden fatura düzenlenemez. Kural sorunu giderildikten sonra “Doğrulamaya gönder” ile yeniden deneyin.'],
+};
+
+/** "KOD: mesaj | KOD: mesaj" biçimindeki hata metnini maddelere ayırır. */
+export function parseIssues(text) {
+  if (!text) return [];
+  return String(text).split(/\s+\|\s+/).map((part) => {
+    const m = /^([A-Z][A-Z0-9-]{2,63}):\s*(.*)$/s.exec(part.trim());
+    const code = m ? m[1] : null;
+    const message = m ? m[2] : part.trim();
+    const hint = code && ISSUE_HINTS[code];
+    return { code, message, title: hint ? hint[0] : null, hint: hint ? hint[1] : null };
+  });
+}

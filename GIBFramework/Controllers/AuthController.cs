@@ -11,6 +11,8 @@ namespace GIBFramework.Controllers;
 public sealed class AuthController(AuthService auth) : ControllerBase
 {
     public const string LoginRateLimitPolicy = "login";
+    public const string PanelCookie = "__Host-gibframework-session";
+    public const string PanelHeader = "X-GibFramework-Panel";
 
     [HttpPost("login")]
     [AllowAnonymous]
@@ -20,12 +22,27 @@ public sealed class AuthController(AuthService auth) : ControllerBase
         var result = await auth.LoginAsync(request.UserCode, request.Password, request.TotpCode, HttpContext.Connection.RemoteIpAddress, ct);
         return result.Outcome switch
         {
-            LoginOutcome.Success => Ok(new LoginResponse(result.Token!.AccessToken, "Bearer", result.Token.ExpiresAt, result.User!)),
+            LoginOutcome.Success => LoginSuccess(result),
             LoginOutcome.TotpRequired => Problem(StatusCodes.Status401Unauthorized, "TOTP_REQUIRED", "İki adımlı doğrulama kodu gerekli."),
-            LoginOutcome.LockedOut => Problem(StatusCodes.Status423Locked, "ACCOUNT_LOCKED", $"Hesap geçici olarak kilitlendi. Tekrar deneme: {result.LockedUntil:HH:mm}."),
+            LoginOutcome.LockedOut => Problem(StatusCodes.Status423Locked, "ACCOUNT_LOCKED", "Hesap geçici olarak kilitlendi. Lütfen daha sonra tekrar deneyin."),
             _ => Problem(StatusCodes.Status401Unauthorized, "INVALID_CREDENTIALS", "Kullanıcı kodu veya şifre hatalı."),
         };
     }
+
+    private IActionResult LoginSuccess(LoginResult result)
+    {
+        var token = result.Token!;
+        if (Request.Headers[PanelHeader].ToString() != "1")
+            return Ok(new LoginResponse(token.AccessToken, "Bearer", token.ExpiresAt, result.User!));
+
+        var cookie = PanelCookieOptions();
+        cookie.Expires = token.ExpiresAt;
+        Response.Cookies.Append(PanelCookie, token.AccessToken, cookie);
+        return Ok(new { token.ExpiresAt, result.User });
+    }
+
+    private static CookieOptions PanelCookieOptions() =>
+        new() { HttpOnly = true, Secure = true, SameSite = SameSiteMode.Strict, Path = "/", IsEssential = true };
 
     [HttpGet("me")]
     [Authorize(AuthenticationSchemes = "Bearer")]
@@ -83,6 +100,8 @@ public sealed class AuthController(AuthService auth) : ControllerBase
     public async Task<IActionResult> Logout(CancellationToken ct)
     {
         await auth.LogoutEverywhereAsync(ct);
+        if (Request.Headers[PanelHeader].ToString() == "1")
+            Response.Cookies.Delete(PanelCookie, PanelCookieOptions());
         return NoContent();
     }
 
@@ -129,10 +148,12 @@ public sealed class UsersController(UserAdminService users) : ControllerBase
     }
 
     [HttpPatch("{id:guid}")]
+    [HttpPost("{id:guid}/update")]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateUserRequest request, CancellationToken ct) =>
         Ok(await users.UpdateAsync(id, new UserChanges(request.Roles, request.IsActive, request.DisplayName, request.Email, request.Phone), ct));
 
     [HttpDelete("{id:guid}")]
+    [HttpPost("{id:guid}/delete")]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
         await users.UpdateAsync(id, new UserChanges(null, false, null, null, null), ct, removeAccess: true);

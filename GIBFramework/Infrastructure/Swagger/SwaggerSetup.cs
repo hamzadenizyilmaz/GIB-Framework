@@ -129,7 +129,7 @@ public static class SwaggerSetup
             o.ShowExtensions();
             o.ShowCommonExtensions();
             o.InjectStylesheet("/swagger-ui/gibframework.css?v=2");
-            o.InjectJavascript("/swagger-ui/gibframework-login.js?v=2");
+            o.InjectJavascript("/swagger-ui/gibframework-login.js?v=3");
         });
         app.UseReDoc(o =>
         {

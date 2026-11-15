@@ -61,8 +61,13 @@ public sealed class GibPortalController(GibPortalService portal) : ControllerBas
         Ok(await portal.ListIssuedToMeAsync(from, to, ct));
 
     [HttpGet("documents/{ettn}/html")]
-    public async Task<IActionResult> DocumentHtml(string ettn, [FromQuery] bool approved, CancellationToken ct) =>
-        Content(await portal.GetDocumentHtmlAsync(ettn, approved, ct), "text/html; charset=utf-8");
+    public async Task<IActionResult> DocumentHtml(string ettn, [FromQuery] bool approved, CancellationToken ct)
+    {
+        var html = await portal.GetDocumentHtmlAsync(ettn, approved, ct);
+        Response.Headers.ContentSecurityPolicy = Services.Messaging.InvoiceDocumentService.PreviewPolicy
+            + "; sandbox; frame-ancestors 'none'";
+        return Content(html, "text/html; charset=utf-8");
+    }
 
     [HttpGet("recipients/{taxId}")]
     public async Task<IActionResult> Recipient(string taxId, CancellationToken ct)

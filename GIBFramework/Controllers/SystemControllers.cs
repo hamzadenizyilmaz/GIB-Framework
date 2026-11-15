@@ -47,6 +47,7 @@ public sealed class SecurityPolicyController(SecurityPolicyService policies, ITe
     }
 
     [HttpPut]
+    [HttpPost("update")]
     [Authorize(Policy = Policies.SecurityManage)]
     public async Task<IActionResult> Save([FromBody] SecurityPolicyRequest request, CancellationToken ct) =>
         Ok(await policies.SaveAsync(request, User.IsInRole(Roles.PlatformSuperAdmin) || User.HasClaim(TokenService.AuthMethodClaim, "mfa"), ct));

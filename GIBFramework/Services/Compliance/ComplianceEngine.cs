@@ -2,9 +2,11 @@ namespace GIBFramework.Services.Compliance;
 
 public sealed record RuleTraceEntry(string RuleVersion, string Kind, string Outcome, IReadOnlyList<string> Notes);
 
-public sealed class ComplianceEngine(RuleSet ruleSet, RuleEvaluatorRegistry registry, ComplianceOptions options, IClock clock)
+public sealed class ComplianceEngine(RuleSet ruleSet, RuleEvaluatorRegistry registry, ComplianceOptions options, IClock clock, RuleReviewStore reviews)
 {
     public RuleSet RuleSet => ruleSet;
+
+    public RuleReviewStore Reviews => reviews;
 
     public ComplianceDecision Evaluate(ComplianceContext context) => EvaluateWithTrace(context).Decision;
 
@@ -21,7 +23,7 @@ public sealed class ComplianceEngine(RuleSet ruleSet, RuleEvaluatorRegistry regi
         var active = new List<LegalRule>();
         foreach (var rule in ruleSet.EffectiveOn(context.DocumentDate))
         {
-            if (rule.IsApproved || options.AllowUnapprovedRules)
+            if (reviews.IsApproved(rule) || options.AllowUnapprovedRules)
             {
                 active.Add(rule);
             }
@@ -55,10 +57,19 @@ public sealed class ComplianceEngine(RuleSet ruleSet, RuleEvaluatorRegistry regi
             }
         }
 
-        if (routingRule is null)
+        if (routingRule is null && options.AccountTypeRouting && AccountTypeRoute(context) is { } accountRoute)
+        {
+            documentType = accountRoute.Type;
+            findings.Add(new("COMPLIANCE-ACCOUNT-ROUTING", FindingSeverity.Warning, false, accountRoute.Reason, null));
+            explanation.Add(accountRoute.Reason);
+            trace.Add(new("ACCOUNT-TYPE-ROUTING", "AccountTypeRouting", "Applied", [accountRoute.Reason]));
+        }
+        else if (routingRule is null)
         {
             findings.Add(new("COMPLIANCE-NO-ROUTING-RULE", FindingSeverity.Error, true,
-                $"{Fmt.Date(context.DocumentDate)} tarihi için belge türünü belirleyen yürürlükte (ve kullanılabilir) bir kural versiyonu bulunamadı. Başka bir dönemin kuralı uygulanmaz; manuel inceleme gerekir.",
+                $"{Fmt.Date(context.DocumentDate)} tarihi için belge türünü belirleyen yürürlükte (ve kullanılabilir) bir kural versiyonu bulunamadı ve hesap türüne göre de belirlenemedi " +
+                (context.Buyer.IsEFaturaRegistered ? "(alıcı e-Fatura kayıtlı, satıcı firma profilinde e-Fatura kullanıcısı değil)." : "(satıcı firma profilinde e-Arşiv kullanıcısı olarak işaretli değil).") +
+                " Firma profilindeki e-Belge kayıtlarını kontrol edin veya kuralları onaylatın.",
                 null));
             explanation.Add("Bu tarih için belge türünü belirleyen kural versiyonu bulunamadığından belge türü belirlenemedi.");
         }
@@ -76,7 +87,7 @@ public sealed class ComplianceEngine(RuleSet ruleSet, RuleEvaluatorRegistry regi
             }
         }
 
-        var unapproved = applied.Where(r => !r.IsApproved).Select(r => r.VersionTag).ToList();
+        var unapproved = applied.Where(r => !reviews.IsApproved(r)).Select(r => r.VersionTag).ToList();
 
         explanation.Add(documentType switch
         {
@@ -92,7 +103,7 @@ public sealed class ComplianceEngine(RuleSet ruleSet, RuleEvaluatorRegistry regi
             DecidedAt = clock.UtcNow,
             DocumentDate = context.DocumentDate,
             DocumentType = documentType,
-            RoutingRuleVersion = routingRule?.VersionTag,
+            RoutingRuleVersion = routingRule?.VersionTag ?? (documentType == EDocumentType.Undetermined ? null : "ACCOUNT-TYPE-ROUTING"),
             LegalBasis = [.. applied.SelectMany(r => r.LegalBasis).Select(b => b.Key).Distinct(StringComparer.Ordinal)],
             RuleVersions = [.. evaluated.Select(r => r.VersionTag)],
             Findings = findings,
@@ -103,6 +114,25 @@ public sealed class ComplianceEngine(RuleSet ruleSet, RuleEvaluatorRegistry regi
         };
 
         return (decision, trace);
+    }
+
+    /// <summary>Kural uygulanamadığında tarafların e-Fatura / e-Arşiv kayıt durumuna göre belge türü.</summary>
+    private static (EDocumentType Type, string Reason)? AccountTypeRoute(ComplianceContext context)
+    {
+        var buyer = context.Buyer;
+        var seller = context.Seller;
+        if (buyer.IsEFaturaRegistered && seller.IsEFaturaRegistered)
+        {
+            return (EDocumentType.EFatura, "Onaylı belge türü kuralı uygulanamadı; alıcı ve satıcı e-Fatura kayıtlı kullanıcı olduğundan belge hesap türüne göre e-Fatura olarak belirlendi.");
+        }
+
+        // Hesap türü VKN/TCKN'den: 11 hane TCKN → şahıs, 10 hane VKN → şirket.
+        var taxId = buyer.TaxId ?? string.Empty;
+        var who = taxId.Length == 11 ? "şahıs (TCKN) alıcı" : taxId.Length == 10 ? "şirket (VKN) alıcı" : "alıcı";
+        var reason = buyer.IsEFaturaRegistered
+            ? $"Onaylı belge türü kuralı uygulanamadı; {who} e-Fatura kayıtlı ancak satıcı e-Fatura kullanıcısı olmadığından belge e-Arşiv olarak belirlendi."
+            : $"Onaylı belge türü kuralı uygulanamadı; {who} e-Fatura kayıtlı kullanıcı olmadığından belge hesap türüne göre e-Arşiv olarak belirlendi.";
+        return (EDocumentType.EArsiv, reason);
     }
 
     private static ValidationStatus Classify(IReadOnlyList<ComplianceFinding> findings)

@@ -68,8 +68,10 @@ public static class ServiceCollectionExtensions
         services.AddOptionsInstance<UblOptions>(configuration, UblOptions.Section);
         var workers = services.AddOptionsInstance<WorkerOptions>(configuration, WorkerOptions.Section);
         services.AddOptionsInstance<BootstrapOptions>(configuration, BootstrapOptions.Section);
+        services.AddOptionsInstance<InstallOptions>(configuration, InstallOptions.Section);
         services.AddOptionsInstance<DemoOptions>(configuration, DemoOptions.Section);
-        services.AddOptionsInstance<GibPortalOptions>(configuration, GibPortalOptions.Section);
+        var portal = services.AddOptionsInstance<GibPortalOptions>(configuration, GibPortalOptions.Section);
+        GibPortalClient.ValidateEndpoints(portal);
         var security = services.AddOptionsInstance<SecurityOptions>(configuration, SecurityOptions.Section);
 
         var demoHost = environment.IsEnvironment(DemoEnvironment);
@@ -105,9 +107,18 @@ public static class ServiceCollectionExtensions
         services.AddRateLimiter(o =>
         {
             o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+            o.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(http =>
+                http.GetEndpoint()?.Metadata.GetMetadata<Microsoft.AspNetCore.RateLimiting.EnableRateLimitingAttribute>()?.PolicyName
+                    == HooksController.RateLimitPolicy
+                ? RateLimitPartition.GetConcurrencyLimiter(HooksController.RateLimitPolicy,
+                    _ => new ConcurrencyLimiterOptions { PermitLimit = 32, QueueLimit = 0 })
+                : RateLimitPartition.GetNoLimiter("other"));
             o.AddPolicy(AuthController.LoginRateLimitPolicy, http => RateLimitPartition.GetFixedWindowLimiter(
                 http.Connection.RemoteIpAddress?.ToString() ?? "unknown",
                 _ => new FixedWindowRateLimiterOptions { PermitLimit = security.LoginRateLimitPerMinute, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+            o.AddPolicy(InstallController.RateLimitPolicy, http => RateLimitPartition.GetFixedWindowLimiter(
+                http.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                _ => new FixedWindowRateLimiterOptions { PermitLimit = 5, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
             o.AddPolicy(HooksController.RateLimitPolicy, http => RateLimitPartition.GetFixedWindowLimiter(
                 http.Connection.RemoteIpAddress?.ToString() ?? "unknown",
                 _ => new FixedWindowRateLimiterOptions { PermitLimit = 240, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
@@ -121,6 +132,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(RuleEvaluatorRegistry.CreateDefault());
         services.AddSingleton(sp => JsonRuleSetLoader.LoadFromDirectory(seedRoot, sp.GetRequiredService<RuleEvaluatorRegistry>()));
         services.AddSingleton(_ => TaxCatalogLoader.LoadFromDirectory(seedRoot));
+        services.AddSingleton<RuleReviewStore>();
         services.AddSingleton<ComplianceEngine>();
         services.AddSingleton<TaxEngine>();
         services.AddSingleton<UblInvoiceWriter>();
@@ -165,7 +177,11 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IProductRepository, ProductRepository>();
         services.AddScoped<ITenantSettingsRepository, TenantSettingsRepository>();
         var locationOptions = services.AddOptionsInstance<LocationOptions>(configuration, LocationOptions.Section);
-        services.AddHttpClient(TkgmClient.HttpClientName, c => c.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (compatible; GIBFramework/1.0)"));
+        services.AddHttpClient(TkgmClient.HttpClientName, c =>
+        {
+            c.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (compatible; GIBFramework/1.0)");
+            c.MaxResponseContentBufferSize = 4 * 1024 * 1024;
+        }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { UseCookies = false, AllowAutoRedirect = false });
         services.AddSingleton<TkgmClient>();
         services.AddSingleton<LocationSyncState>();
         services.AddScoped<LocationRepository>();
@@ -178,7 +194,11 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IncomingInvoiceService>();
         services.AddScoped<TaxOfficeImportService>();
         var taxOfficeOptions = services.AddOptionsInstance<TaxOfficeOptions>(configuration, TaxOfficeOptions.Section);
-        services.AddHttpClient(TaxOfficeBootstrapWorker.HttpClientName, c => c.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (compatible; GIBFramework/1.0)"));
+        services.AddHttpClient(TaxOfficeBootstrapWorker.HttpClientName, c =>
+        {
+            c.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (compatible; GIBFramework/1.0)");
+            c.MaxResponseContentBufferSize = 32 * 1024 * 1024;
+        }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { UseCookies = false, AllowAutoRedirect = false });
         if (taxOfficeOptions.AutoLoad && !string.IsNullOrWhiteSpace(database.ConnectionString))
         {
             services.AddHostedService<TaxOfficeBootstrapWorker>();
@@ -203,8 +223,9 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient(nameof(LegalSourceWatcher), c =>
         {
             c.Timeout = TimeSpan.FromSeconds(60);
+            c.MaxResponseContentBufferSize = 32 * 1024 * 1024;
             c.DefaultRequestHeaders.UserAgent.ParseAdd("GIBFramework-LegalSourceWatcher/1.0");
-        });
+        }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { UseCookies = false, AllowAutoRedirect = false });
         if (localMode && !providers.PortalOnly && workers.DispatcherEnabled && !string.IsNullOrWhiteSpace(database.ConnectionString))
         {
             services.AddHostedService<DispatcherWorker>();
@@ -229,6 +250,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ApiKeyService>();
         services.AddScoped<SecurityPolicyService>();
         services.AddScoped<PasswordResetRequestService>();
+        services.AddHostedService<PasswordResetIntakeWorker>();
 
         services.AddOptionsInstance<AppOptions>(configuration, AppOptions.Section);
         services.AddOptionsInstance<OutboundNetworkOptions>(configuration, OutboundNetworkOptions.Section);
@@ -237,8 +259,9 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient(NetgsmClient.HttpClientName, c =>
         {
             c.Timeout = TimeSpan.FromSeconds(30);
+            c.MaxResponseContentBufferSize = 2 * 1024 * 1024;
             c.DefaultRequestHeaders.UserAgent.ParseAdd("GIBFramework/5.2");
-        }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false }).RemoveAllLoggers();
+        }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { UseCookies = false, AllowAutoRedirect = false }).RemoveAllLoggers();
         services.AddHttpClient(IntegrationService.HttpClientName, c =>
         {
             c.Timeout = TimeSpan.FromSeconds(20);
@@ -269,7 +292,7 @@ public static class ServiceCollectionExtensions
         }).RemoveAllLoggers();
         services.AddOptionsInstance<MarketplaceOptions>(configuration, MarketplaceOptions.Section);
         services.AddHttpClient(MarketplaceClientBase.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(40))
-            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false }).RemoveAllLoggers();
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { UseCookies = false, AllowAutoRedirect = false }).RemoveAllLoggers();
         services.AddSingleton<IMarketplaceClient, TrendyolClient>();
         services.AddSingleton<IMarketplaceClient, HepsiburadaClient>();
         services.AddSingleton<IMarketplaceClient, N11Client>();
@@ -319,16 +342,30 @@ public static class ServiceCollectionExtensions
 
             o.Events = new JwtBearerEvents
             {
+                OnMessageReceived = ctx =>
+                {
+                    var request = ctx.Request;
+                    if (!request.Headers.ContainsKey("Authorization")
+                        && !request.Headers.ContainsKey(ApiKeyAuthenticationHandler.HeaderName)
+                        && request.Path.StartsWithSegments("/api")
+                        && request.Headers[AuthController.PanelHeader].ToString() == "1")
+                    {
+                        ctx.Token = request.Cookies[AuthController.PanelCookie];
+                    }
+                    return Task.CompletedTask;
+                },
                 OnTokenValidated = async ctx =>
                 {
                     var stamp = ctx.Principal?.FindFirst(TokenService.SecurityStampClaim)?.Value;
                     var userCode = ctx.Principal?.FindFirst(GibFrameworkClaims.Subject)?.Value;
                     var method = ctx.Principal?.FindFirst(TokenService.AuthMethodClaim)?.Value;
+#if DEBUG
                     if (environment.IsDevelopment() && jwt.DevTokenEnabled && method == "dev"
                         && !string.IsNullOrWhiteSpace(userCode))
                     {
                         return;
                     }
+#endif
 
                     if (!Guid.TryParseExact(stamp, "N", out _) || string.IsNullOrWhiteSpace(userCode) || method is not ("pwd" or "mfa"))
                     {
@@ -357,7 +394,6 @@ public static class ServiceCollectionExtensions
         services.AddControllers().AddJsonOptions(o =>
         {
             o.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
-            o.JsonSerializerOptions.Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
         });
         services.AddGibFrameworkSwagger();
 

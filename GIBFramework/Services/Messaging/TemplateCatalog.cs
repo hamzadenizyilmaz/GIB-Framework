@@ -247,4 +247,37 @@ public static class TemplateCatalog
     ];
 
     public static TemplateDefinition? Find(string key) => All.FirstOrDefault(t => t.Key == key);
+
+    public const string CustomPrefix = "custom:";
+
+    public const string CustomPreviewKey = "custom";
+
+    public static readonly IReadOnlyList<(string Code, string Label)> CustomRecipients =
+    [
+        ("Customer", "Faturanın alıcısı (müşteri)"),
+        ("Creator", "Faturayı hazırlayan kullanıcı"),
+        ("Approvers", "Onay yetkisi olan kullanıcılar"),
+        ("Address", "Sabit adres / telefon"),
+    ];
+
+    /// <summary>Özel şablonlarda kullanılabilecek değişkenler.</summary>
+    public static IReadOnlyList<TemplateVariable> CustomVariables { get; } = Vars(Company, Invoice,
+    [
+        new("kullanici.ad", "Alıcının adı", "Ayşe Yılmaz"),
+        new("neden", "Red / iptal / hata nedeni", "Birim fiyat hatalı"),
+        new("islem_yapan", "İşlemi yapan kullanıcı", "muhasebe"),
+        new("tarih", "Gönderim tarihi", "08.10.2026 14:30"),
+    ]);
+
+    public static TemplateDefinition CustomDefinition(CustomTemplate template)
+    {
+        ArgumentNullException.ThrowIfNull(template);
+        var email = template.Channel == MessageChannel.Email;
+        return new TemplateDefinition(CustomPrefix + template.Id.ToString("N"), template.Name,
+            CustomRecipients.FirstOrDefault(r => r.Code == template.Recipient).Label ?? template.Recipient, "Özel şablon", CustomVariables,
+            email ? template.Subject : null, email ? template.Body : null, template.Enabled,
+            email ? null : template.Body, template.Enabled, []);
+    }
+
+    public static TemplateDefinition CustomPreview { get; } = new(CustomPreviewKey, "Özel şablon", "", "", CustomVariables, "", "", true, "", true, []);
 }

@@ -24,6 +24,7 @@ public sealed partial class ExceptionHandlingMiddleware(RequestDelegate next, IL
                 ForbiddenOperationException f => (StatusCodes.Status403Forbidden, f.Code, []),
                 ProviderUnavailableException => (StatusCodes.Status503ServiceUnavailable, "PROVIDER_UNAVAILABLE", []),
                 GibPortalException g => (StatusCodes.Status502BadGateway, g.SessionExpired ? "GIB_PORTAL_SESSION_EXPIRED" : "GIB_PORTAL_ERROR", []),
+                BadHttpRequestException b => (b.StatusCode, "INVALID_HTTP_REQUEST", []),
                 SqlException { Number: >= 51000 and < 52000 } s => (StatusCodes.Status409Conflict, "DB_INTEGRITY_" + s.Number, []),
                 _ => (StatusCodes.Status500InternalServerError, "INTERNAL_ERROR", []),
             };

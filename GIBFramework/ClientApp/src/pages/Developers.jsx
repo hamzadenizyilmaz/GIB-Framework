@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { useSession } from '../session.jsx';
+import { api } from '../api.js';
 import { Card, PageHeader, Spinner, useLoad } from '../components/ui.jsx';
 
 const METHOD_COLOR = { get: 'primary', post: 'success', put: 'warning', patch: 'info', delete: 'danger' };
@@ -119,11 +120,7 @@ function Operation({ doc, method, path, op }) {
 
 function Reference() {
   const [q, setQ] = useState('');
-  const { data: doc, loading, error } = useLoad(async () => {
-    const r = await fetch('/swagger/v1/swagger.json', { cache: 'no-store' });
-    if (!r.ok) throw new Error('OpenAPI dokümanı alınamadı.');
-    return r.json();
-  }, []);
+  const { data: doc, loading, error } = useLoad(() => api.get('/swagger/v1/swagger.json'), []);
 
   const groups = useMemo(() => {
     if (!doc) return [];
