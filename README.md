@@ -1,10 +1,10 @@
 <p align="center">
-  <img src="assets/branding/gib-framework-logo.svg" alt="GIB Framework" width="42%" align="middle">
-  &nbsp;&nbsp;&nbsp;
+  <img src="assets/branding/gib-framework-logo.svg" alt="GIB Framework" width="38%" align="middle">
+  &nbsp;&nbsp;&nbsp;&nbsp;
   <a href="https://www.bilhost.com/panel/aff.php?aff=37">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="assets/branding/bilhost-logo-dark.svg">
-      <img src="assets/branding/bilhost-logo.svg" alt="Bilhost" width="42%" align="middle">
+      <img src="assets/branding/bilhost-logo.svg" alt="Bilhost" width="16%" align="middle">
     </picture>
   </a>
 </p>
@@ -22,7 +22,7 @@ Gelir İdaresi Başkanlığı e-Fatura ve e-Arşiv süreçleri için çok amaçl
 ![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet&logoColor=white)
 ![React](https://img.shields.io/badge/React-19-149ECA?logo=react&logoColor=white)
 ![SQL Server](https://img.shields.io/badge/SQL%20Server-2019%2B-CC2927?logo=microsoftsqlserver&logoColor=white)
-![Sürüm](https://img.shields.io/badge/s%C3%BCr%C3%BCm-6.0.0-0778E6)
+![Sürüm](https://img.shields.io/badge/s%C3%BCr%C3%BCm-6.1.0-0778E6)
 [![Architecture diagram](https://gitdiagram.com/diagram-badge.svg)](https://gitdiagram.com/hamzadenizyilmaz/gib-framework)
 
 [Proje sitesi](https://framework.hamzadenizyilmaz.com.tr) &nbsp;|&nbsp;
