@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="416" height="96" viewBox="0 0 416 96" role="img" aria-labelledby="logo-title">
+  <title id="logo-title">GIB Framework</title>
+  <style>
+    .wordmark { fill: #181a2f; }
+    @media (prefers-color-scheme: dark) {
+      .wordmark { fill: #f6eee6; }
+    }
+  </style>
+  <g transform="translate(8 8) scale(.76)">
+    <path d="M0.94165 73.5919V22.0335L22.0337 0.941406H82.9664L104.058 22.0335V34.9231H81.7946V31.4077L73.5921 23.2053H31.408L23.2055 31.4077V51.328L0.94165 73.5919Z" fill="#2563EB"/>
+    <path d="M0.94165 84.1379V81.7944L23.2055 59.5305V73.5919L31.408 81.7944H73.5921L81.7946 73.5919V44.2974H104.058V82.9662L82.9664 104.058H22.0337L0.94165 84.1379Z" fill="#0F766E"/>
+    <path d="M51.3282 44.2974H104.058L81.7945 66.5612H51.3282L40.1963 55.4293L51.3282 44.2974Z" fill="#2563EB"/>
+  </g>
+  <text class="wordmark" x="104" y="62" font-family="Manrope, Segoe UI, Arial, sans-serif" font-size="40" font-weight="600" letter-spacing="-.6"><tspan font-weight="800">GIB</tspan> Framework</text>
+</svg>
